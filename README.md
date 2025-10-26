@@ -56,7 +56,7 @@ Drop files into whichever layer fits (inventory artifacts, per-role files, or an
 1. Download the bootstrap script.
 
 ```bash
-curl https://raw.githubusercontent.com/tregrum/infra-core/refs/heads/main/files/new-env-repo.sh
+curl -SsO https://raw.githubusercontent.com/tregrum/infra-core/refs/heads/main/files/new-infra-env.sh
 ```
 
 2. Review and customize any details for your environment.
