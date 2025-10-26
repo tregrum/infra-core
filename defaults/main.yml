@@ -1,0 +1,74 @@
+---
+#
+# Defaults
+#
+fix_root_pv: false
+# sudoers_group:
+# mail_relay:
+# dns_domain_search:
+# selinux_config:
+# timezone:
+# ca_file:
+# force_orgca:
+#
+packages_installed: []
+packages_installed_extra: []
+packages_uninstalled: []
+services_enabled: []
+services_disabled: []
+firewall_allow_ports: []
+packages_rpm: []
+packages_rpm_artifact_src: "{{ artifacts_root }}/rpms"
+packages_rpm_remote_cache: "/var/cache/infra-core/rpms"
+etc_motd_content: |+
+  #############################################################################
+      Welcome to {{ ansible_nodename }} ({{ ansible_default_ipv4.address }})
+  #############################################################################
+profile_inputrc_content: |+
+  set editing-mode vi
+profile_digrc_content: |+
+  +search +short
+profile_managed_files_common:
+  [
+    { user: root, name: ".bashrc", src: files/default_bashrc },
+    { user: root, name: ".bash_profile", src: files/default_bash_profile },
+    { user: root, name: ".inputrc", content: "{{ profile_inputrc_content }}" },
+    { user: root, name: ".digrc", content: "{{ profile_digrc_content }}" },
+  ]
+
+profile_managed_files_bespoke:
+  [{ user: emmet, name: ".digrc", content: "{{ profile_digrc_content }}" }]
+
+profile_managed_files: >-
+  {{
+    (profile_managed_files_common | default([], true))
+    + (profile_managed_files_bespoke | default([], true))
+  }}
+
+crontabs_removed: []
+updates: {}
+repos_enabled: {}
+volume_groups: {}
+local_mounts: {}
+network_mounts: {}
+local_groups: {}
+group_members: {}
+local_accounts: {}
+local_paths: {}
+crontab_entries: {}
+local_acls: {}
+#
+artifacts_root: "{{ inventory_dir }}/artifacts"
+artifacts_common: [] # shared everywhere
+artifacts_env: [] # from group_vars/<env>.yml
+artifacts_role: [] # from group_vars/<role>.yml
+artifacts_host: [] # from host_vars/<host>.yml
+
+# final merged list (can override in play )
+artifacts_merged: >-
+  {{
+    (artifacts_common | default([]))
+    + (artifacts_env   | default([]))
+    + (artifacts_role  | default([]))
+    + (artifacts_host  | default([]))
+  }}

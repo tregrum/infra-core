@@ -1,0 +1,138 @@
+---
+- name: Root Disk Short ID
+  ansible.builtin.set_fact:
+    root_sd_id: "{{ (root_sd | default('')) | regex_replace('^/dev/', '') }}"
+    vg_device_map: {}
+
+- name: Build map of existing PV -> VG (used devices)
+  ansible.builtin.set_fact:
+    pv_to_vg: >-
+      {{
+        dict(
+          pv_ids | zip(pv_vgs)
+        )
+      }}
+    used_device_ids: "{{ pv_ids }}"
+  vars:
+    pv_items: "{{ ansible_lvm.pvs | default({}, true) | dict2items }}"
+    pv_ids: "{{ pv_items | map(attribute='key') | map('regex_replace', '^/dev/', '') | list }}"
+    pv_vgs: "{{ pv_items | map(attribute='value.vg') | list }}"
+
+- name: Gather list of available disks
+  ansible.builtin.set_fact:
+    # match common whole-disk device name patterns: sda, vda, xvd*, hd*, nvme0n1, mmcblk0
+    free_disk_ids: >-
+      {{
+        ansible_devices.keys()
+        | select('match', '^(?:[sv]d[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\\d+n\\d+|mmcblk\\d+)$')
+        | reject('equalto', root_sd_id)
+        | reject('in', used_device_ids)
+        | list
+      }}
+
+- name: Validate user-specified pv/device values exist in discovered devices
+  ansible.builtin.fail:
+    msg: >-
+      Explicitly configured {{ which }} '/dev/{{ val }}' for VG '{{ item.key }}' does not exist
+      in discovered devices. Check your group_vars for typos.
+  loop: "{{ volume_groups | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    # for each item, collect any user provided pv or device (normalized)
+    val: >-
+      {{ (item.value.pv | default(item.value.device | default(''))) | regex_replace('^/dev/', '') }}
+    which: >-
+      {{ ( 'pv' if (item.value.pv is defined and item.value.pv|length>0) else
+           ( 'device' if (item.value.device is defined and item.value.device|length>0) else 'explicit target') ) }}
+  when: >-
+    (item.value.pv is defined or item.value.device is defined) and val | length > 0 and (val not in ansible_devices.keys())
+
+- name: Build dictionary of device sizes
+  ansible.builtin.set_fact:
+    usable_devices: "{{ dict(free_disk_ids | zip(device_sizes)) }}"
+  vars:
+    device_sizes: >-
+      {{
+        free_disk_ids
+        | map('extract', ansible_devices)
+        | map(attribute='size')
+        | map('regex_search', '([0-9]+(?:\\.[0-9]+)?)')
+        | map('float')
+        | map('int')
+        | list
+      }}
+
+- name: Sort volume groups by size in descending order
+  ansible.builtin.set_fact:
+    sorted_volume_groups: "{{ volume_groups | dict2items | sort(attribute='value.size_gb', reverse=True) }}"
+
+- name: Assign devices to volume groups
+  ansible.builtin.set_fact:
+    vg_device_map: >-
+      {{
+        vg_device_map | combine({
+          item.value.name:
+            (
+              selected_device
+            )
+        })
+      }}
+  loop: "{{ sorted_volume_groups }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    explicit_pv: "{{ item.value.pv | default('', true) | regex_replace('^/dev/', '') }}"
+    explicit_device: "{{ item.value.device | default('', true) | regex_replace('^/dev/', '') }}"
+    auto_device: >-
+      {{
+        usable_devices
+        | dict2items
+        | selectattr('value', '>=', item.value.size_gb)
+        | sort(attribute='value')
+        | map(attribute='key')
+        | first
+        | default('')
+      }}
+    selected_device: >-
+      {{
+        (explicit_pv | length > 0)
+        | ternary(
+            explicit_pv,
+            (
+              (explicit_device | length > 0)
+              | ternary(explicit_device, auto_device)
+            )
+          )
+      }}
+  when: >-
+    (
+      (explicit_pv | length > 0)
+      or (explicit_device | length > 0)
+      or (auto_device | length > 0)
+    )
+
+- name: LVM | Create volume group
+  community.general.lvg:
+    vg: "{{ item.key }}"
+    pvs: "/dev/{{ item.value }}"
+  loop: "{{ vg_device_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: LVM | Validate requested pv/device not already used by different VG
+  ansible.builtin.fail:
+    msg: >-
+      Requested PV/device '/dev/{{ item.value }}' for VG '{{ item.key }}' is
+      already in use by VG '{{ (pv_to_vg[item.value] if pv_to_vg[item.value] is defined else
+      (pv_to_vg | dict2items | selectattr('key', 'match', '^' + item.value) | map(attribute='value') | first)) }}'.
+  when: >-
+    (
+      (pv_to_vg[item.value] is defined and pv_to_vg[item.value] != item.key)
+      or
+      ((pv_to_vg | dict2items | selectattr('key','match', '^' + (item.value|string))
+        | selectattr('value','ne', item.key) | list) | length > 0)
+    )
+  loop: "{{ vg_device_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

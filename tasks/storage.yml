@@ -1,0 +1,76 @@
+- name: LVM | ID root VG
+  ansible.builtin.set_fact:
+    root_vg: >-
+      {{ (ansible_lvm.lvs | dict2items
+        |selectattr('key', 'in', ['lvroot', 'root'])
+        | map(attribute='value.vg')
+        | first) |default(None)
+       }}
+
+- name: LVM | ID Root Disk Device
+  ansible.builtin.set_fact:
+    # find the PV whose vg matches the identified root_vg (first match)
+    root_pv: >-
+      {{ (ansible_lvm.pvs | dict2items
+          | selectattr('value.vg','equalto', root_vg)
+          | map(attribute='key')
+          | first
+        ) | default(None)
+      }}
+  when: root_vg is defined and root_vg is not none
+
+- name: LVM | Derive root disk device
+  ansible.builtin.set_fact:
+    # allow explicit override via group_vars.root_disk, otherwise strip
+    # partition suffixes (supports /dev/sd*, /dev/nvme*, /dev/mmcblk*, /dev/vd*)
+    root_sd: >-
+      {{ (
+          (root_disk | default('', true))
+          if (root_disk | default('', true) | string | trim | length > 0)
+          else (root_pv | default('') | regex_replace('p?[0-9]+$',''))
+        ) | trim
+      }}
+  when:
+    - root_vg is defined and root_vg is not none
+    - root_pv is defined and root_pv is not none
+    - root_pv | string | length > 0
+
+- name: LVM | root VG, PV, and disk device
+  ansible.builtin.debug:
+    msg: "root vg: {{ root_vg }}, root pv: {{ root_pv }}, root disk: {{ root_sd | default('unknown', true) }}"
+
+- name: LVM | Fix Unresized root PV
+  ansible.builtin.include_tasks: "lvm_rootpv.yml"
+  when:
+    - fix_root_pv | default(false) | bool
+    - root_sd is defined
+    - (root_sd | default('')) | length > 0
+
+- name: LVM | Inventory vgs
+  ansible.builtin.set_fact:
+    lsvgs: "{{ ansible_lvm.vgs | list | default([]) }}"
+    datavgs: "{{ volume_groups | combine(volume_groups | default({})) | list | default([]) }}"
+
+- name: LVM | List missing data vgs
+  ansible.builtin.set_fact:
+    missing_vgs: "{{ datavgs | difference(lsvgs) | default('[]') }}"
+
+- name: LVM | Create vgs
+  ansible.builtin.include_tasks: "lvm_pvgs.yml"
+  when:
+    - missing_vgs | length > 0
+
+- name: LVM | Create lvs fs
+  ansible.builtin.include_tasks: "lvm_lvfs.yml"
+  when:
+    - local_mounts | default({}, true) | length > 0
+
+- name: Path | create
+  ansible.builtin.file:
+    path: "{{ item.value.path }}"
+    state: directory
+    mode: "{{ item.value.mode }}"
+    owner: "{{ item.value.owner }}"
+    group: "{{ item.value.group }}"
+  with_dict: "{{ local_paths | default({}, true) }}"
+#

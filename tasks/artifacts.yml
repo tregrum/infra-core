@@ -1,0 +1,123 @@
+# tasks/artifacts.yml
+# Generic, data-driven artifact deployment.
+#
+
+# ---- PARENT DIRS (copy/template only) ----
+- name: Ensure parent directories exist
+  ansible.builtin.file:
+    path: "{{ item.dest | dirname }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ artifacts_merged | selectattr('type', 'in', ['copy', 'template']) | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+
+# ---- COPY (from file path) ----
+- name: Deploy artifacts (copy files)
+  ansible.builtin.copy:
+    src: "{{ artifacts_root }}/files/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    backup: false
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'copy') | rejectattr('content', 'defined') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_copy
+
+# ---- COPY (inline content) ----
+- name: Deploy artifacts (copy inline content)
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    backup: false
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'copy') | selectattr('content', 'defined') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_copy_inline
+
+# ---- TEMPLATE ----
+- name: Deploy artifacts (template)
+  ansible.builtin.template:
+    src: "{{ artifacts_root }}/templates/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    backup: false
+    validate: "{{ item.validate | default(omit) }}"
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'template') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_template
+
+# ---- DIRECTORY ----
+- name: Ensure directories
+  ansible.builtin.file:
+    path: "{{ item.dest }}"
+    state: directory
+    mode: "{{ item.mode | default('0755') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'directory') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+
+# ---- SYMLINK ----
+- name: Create symlinks
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    owner: "{{ item.owner | default(omit) }}"
+    group: "{{ item.group | default(omit) }}"
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'link') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+
+# ---- OPTIONAL: SYNC (rsync) ----
+- name: Sync artifact trees (optional)
+  ansible.posix.synchronize:
+    src: "{{ artifacts_root }}/sync/{{ item.src_dir }}/"
+    dest: "{{ item.dest | regex_replace('/+$', '') }}/"
+    archive: true
+    delete: "{{ item.delete | default(false) }}"
+    compress: true
+    rsync_opts: "{{ item.rsync_opts | default([]) }}"
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'sync') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_sync
+  when: (artifacts_merged | selectattr('type', 'equalto', 'sync') | list | length) > 0
+
+# ---- OPTIONAL: ARCHIVE (tar extract) ----
+- name: Extract archives (optional)
+  ansible.builtin.unarchive:
+    src: "{{ artifacts_root }}/archives/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    remote_src: false
+    extra_opts: >-
+      {{
+        []
+        + (['--strip-components=' ~ (item.strip | int)] if item.strip is defined else [])
+        + (item.include | default([]) | map('regex_replace','^(.*)$','--include=\\1') | list)
+        + (item.exclude | default([]) | map('regex_replace','^(.*)$','--exclude=\\1') | list)
+      }}
+  loop: "{{ artifacts_merged | selectattr('type', 'equalto', 'archive') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_archive
+  when: (artifacts_merged | selectattr('type', 'equalto', 'archive') | list | length) > 0
+
+# ---- COLLECT CHANGED ITEMS FOR POST-SUMMARY ----
+- name: Collect changed artifact items
+  ansible.builtin.set_fact:
+    _artifacts_changed: >-
+      {{
+        (
+          (artifacts_copy.results        | default([])) +
+          (artifacts_copy_inline.results | default([])) +
+          (artifacts_template.results    | default([])) +
+          (artifacts_sync.results        | default([])) +
+          (artifacts_archive.results     | default([]))
+        )
+        | selectattr('changed', 'defined') | selectattr('changed')
+        | map(attribute='item') | list
+      }}
+  changed_when: false

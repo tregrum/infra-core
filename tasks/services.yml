@@ -1,0 +1,52 @@
+---
+- name: Toggle SELinux
+  ansible.posix.selinux:
+    state: "{{ selinux_config }}"
+    policy: "targeted"
+
+- name: Services disabled
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  with_items: "{{ services_disabled | default([], true) }}"
+
+- name: Services enabled
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  with_items: "{{ services_enabled | default([], true) }}"
+
+- name: Firewalld | permit ports
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: enabled
+  with_items: "{{ firewalld_allow_ports | default([], true) }}"
+  when:
+    - "'firewalld' in ansible_facts.packages"
+    - firewalld_allow_ports is defined
+
+- name: Firewalld | Enable Service Profile
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    permanent: true
+    state: enabled
+  with_items: "{{ firewall_enable_services | default([], true) }}"
+  when:
+    - "'firewalld' in ansible_facts.packages"
+    - firewall_enable_services is defined
+
+- name: Mail | set relayhost
+  ansible.builtin.lineinfile:
+    path: "/etc/postfix/main.cf"
+    regexp: "^relayhost = "
+    line: "relayhost = {{ mail_relay }}"
+    backup: true
+  notify: Restart service - postfix
+  when:
+    - mail_relay is defined
+    - "'postfix' in ansible_facts.packages"

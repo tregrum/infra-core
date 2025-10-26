@@ -1,0 +1,44 @@
+---
+
+- name: Parse System Class
+  ansible.builtin.set_fact:
+    host_class: >-
+      {{
+        (
+          (ansible_virtualization_role | default('') == 'guest')
+          | ternary(
+              ansible_virtualization_type | default(ansible_product_name.split()[0], true),
+              ansible_product_name.split()[0]
+            )
+        )
+        | lower
+        | regex_replace('^kvm$', 'qemu')
+      }}
+
+- name: Fix Missing Domain | ifcfg_interface search
+  ansible.builtin.lineinfile:
+    path: /etc/sysconfig/network-scripts/ifcfg-{{ ansible_default_ipv4.interface }}
+    regexp: '^DOMAIN='
+    line: 'DOMAIN={{ dns_domain_search }}'
+    backup: true
+  when: host_class == "vmware"
+  notify: Restart service - NetworkManager
+
+- name: Fix Missing Cert Authority | Install CA
+  ansible.builtin.copy:
+    src: "files/{{ ca_file }}"
+    dest: "/etc/pki/ca-trust/source/anchors/{{ ca_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+    force: "{{ force_orgca | default(omit) }}"
+  notify: Update Trusty CA Certs
+  when: ca_file is defined
+
+- name: Set timezone
+  become: true
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+- name: Flush Handlers
+  ansible.builtin.meta: flush_handlers

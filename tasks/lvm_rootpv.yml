@@ -1,0 +1,40 @@
+- name: Query Root Storage Device Info
+  community.general.parted:
+    device: "{{ root_sd }}"
+    unit: GiB
+  register: disk_info
+  when:
+    - root_sd is defined
+    - root_sd | string | trim | length > 0
+
+- name: Debug
+  ansible.builtin.debug:
+    msg: "{{ disk_info.disk }}"
+  when:
+    - disk_info is defined
+    - disk_info.disk is defined
+
+- name: Fixed Unexpanded Root PV
+  when:
+    - disk_info is defined
+    - disk_info.disk is defined
+    - disk_info.disk.size is defined
+    - (disk_info.disk.size | float > 40 and host_class == "vmware") or
+      (disk_info.disk.size | float > 10 and host_class == "qemu")
+  block:
+    - name: Extended PV partition
+      community.general.parted:
+        device: "{{ root_sd }}"
+        number: "{{ disk_info.partitions | length }}"
+        unit: MiB
+        label: "{{ disk_info.disk.table }}"
+        part_end: "100%"
+        state: present
+        resize: true
+
+    - name: Resized PV
+      community.general.lvg:
+        vg: "{{ root_vg }}"
+        pvs: "{{ root_pv }}"
+        pvresize: true
+#

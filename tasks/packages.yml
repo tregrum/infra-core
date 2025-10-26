@@ -1,0 +1,196 @@
+---
+#
+- name: Collect repository GPG keys
+  ansible.builtin.set_fact:
+    rpmkeys: >-
+      {{
+        (
+          (rpmkeys | default([]))
+          + (
+            (item.value.gpg_key is string)
+            | ternary([item.value.gpg_key], item.value.gpg_key)
+          )
+        )
+        | unique
+      }}
+  loop: "{{ repos_enabled | default({}, true) | dict2items }}"
+  when:
+    - item.value.gpg_key is defined
+    - item.value.gpg_key | length > 0
+
+- name: Import Repo GPG keys
+  ansible.builtin.rpm_key:
+    key: "{{ item }}"
+    state: present
+  loop: "{{ rpmkeys | default([]) }}"
+  when: rpmkeys | default([]) | length > 0
+
+- name: Repositories | install release packages
+  ansible.builtin.dnf:
+    name: "{{ item.value.repo_packages }}"
+    state: present
+  loop: "{{ repos_enabled | default({}, true) | dict2items }}"
+  when: item.value.repo_packages is defined
+
+- name: Repositories | install repo files
+  ansible.builtin.get_url:
+    url: "{{ item.value.repo_file_url }}"
+    dest: "/etc/yum.repos.d/{{ item.value.repo_filename | default(item.value.name | default(item.key)) }}.repo"
+    mode: "0644"
+    owner: "root"
+    group: "root"
+  loop: "{{ repos_enabled | default({}, true) | dict2items }}"
+  when: item.value.repo_file_url is defined
+
+- name: Enable Repository
+  ansible.builtin.yum_repository:
+    name: "{{ item.value.name | default(item.key) }}"
+    baseurl: "{{ item.value.baseurl }}"
+    description: "{{ item.value.description | default(item.value.name | default(item.key)) }}"
+    # gpgcheck: false
+  with_dict: "{{ repos_enabled | default({}, true) }}"
+  when: item.value.baseurl is defined
+
+- name: DNF | install packages
+  ansible.builtin.dnf:
+    name: "{{ packages_install_list }}"
+    state: present
+  vars:
+    packages_install_list: >-
+      {{
+        (
+          (packages_installed | default([], true))
+          +
+          (packages_installed_extra | default([], true))
+        ) | unique
+      }}
+  when: packages_install_list | length > 0
+
+- name: DNF | uninstall packages
+  ansible.builtin.dnf:
+    name: "{{ packages_uninstall_list }}"
+    state: absent
+  vars:
+    packages_uninstall_list: "{{ packages_uninstalled | default([], true) }}"
+  when: packages_uninstall_list | length > 0
+
+- name: Packages | initialize standalone RPM list
+  ansible.builtin.set_fact:
+    packages_rpm_install_items: []
+  when: packages_rpm | default([], true) | length > 0
+
+- name: Packages | queue RPM installs from URLs
+  ansible.builtin.set_fact:
+    packages_rpm_install_items: >-
+      {{
+        packages_rpm_install_items
+        + [
+            item | combine({
+              'source': item.url,
+              'validate_certs': item.validate_certs | default(true)
+            }, recursive=true)
+          ]
+      }}
+  loop: "{{ packages_rpm | default([], true) | selectattr('url', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.url }}"
+  when: packages_rpm | default([], true) | selectattr('url', 'defined') | list | length > 0
+
+- name: Packages | queue RPM installs from artifacts
+  ansible.builtin.set_fact:
+    packages_rpm_install_items: >-
+      {{
+        packages_rpm_install_items
+        + [
+            item | combine({
+              'source': (
+                item.remote_path
+                | default(packages_rpm_remote_cache ~ '/' ~ (item.filename | default(item.artifact | basename)))
+              ),
+              'copy_src': (
+                (item.artifact_root | default(packages_rpm_artifact_src))
+                ~ '/' ~ (item.artifact | regex_replace('^/+',''))
+              )
+            }, recursive=true)
+          ]
+      }}
+  loop: "{{ packages_rpm | default([], true) | selectattr('artifact', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.artifact }}"
+  when: packages_rpm | default([], true) | selectattr('artifact', 'defined') | list | length > 0
+
+- name: Packages | queue RPM installs from role files
+  ansible.builtin.set_fact:
+    packages_rpm_install_items: >-
+      {{
+        packages_rpm_install_items
+        + [
+            item | combine({
+              'source': (
+                item.remote_path
+                | default(packages_rpm_remote_cache ~ '/' ~ (item.filename | default(item.file | basename)))
+              ),
+              'copy_src': role_path ~ '/files/' ~ (item.file | regex_replace('^/+',''))
+            }, recursive=true)
+          ]
+      }}
+  loop: "{{ packages_rpm | default([], true) | selectattr('file', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.file }}"
+  when: packages_rpm | default([], true) | selectattr('file', 'defined') | list | length > 0
+
+- name: Packages | register pre-existing RPM paths
+  ansible.builtin.set_fact:
+    packages_rpm_install_items: >-
+      {{
+        packages_rpm_install_items
+        + [
+            item | combine({
+              'source': item.path
+            }, recursive=true)
+          ]
+      }}
+  loop: "{{ packages_rpm | default([], true) | selectattr('path', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: packages_rpm | default([], true) | selectattr('path', 'defined') | list | length > 0
+
+- name: Packages | ensure RPM cache directory
+  ansible.builtin.file:
+    path: "{{ packages_rpm_remote_cache }}"
+    state: directory
+    mode: "0755"
+  when: >-
+    packages_rpm_install_items | default([])
+    | selectattr('copy_src', 'defined') | list | length > 0
+
+- name: Packages | stage RPM payloads
+  ansible.builtin.copy:
+    src: "{{ item.copy_src }}"
+    dest: "{{ item.source }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "root"
+    group: "root"
+    checksum: "{{ item.checksum | default(omit) }}"
+  loop: "{{ packages_rpm_install_items | default([]) | selectattr('copy_src', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.copy_src }}"
+  when: >-
+    packages_rpm_install_items | default([])
+    | selectattr('copy_src', 'defined') | list | length > 0
+
+- name: Packages | install standalone RPMs
+  ansible.builtin.dnf:
+    name: "{{ item.source }}"
+    state: "{{ item.state | default('present') }}"
+    disable_gpg_check: "{{ item.disable_gpg_check | default(true) }}"
+    validate_certs: "{{ item.validate_certs | default(true) }}"
+  loop: "{{ packages_rpm_install_items | default([]) }}"
+  loop_control:
+    label: "{{ item.source }}"
+  when: packages_rpm_install_items | default([]) | length > 0
+
+- name: Gather package facts
+  ansible.builtin.package_facts:
+    manager: auto
+  no_log: true

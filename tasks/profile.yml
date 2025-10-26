@@ -1,0 +1,100 @@
+---
+- name: MOTD | var defined (content)
+  ansible.builtin.copy:
+    content: >-
+      {{ etc_motd_content | default('') | string }}
+    dest: "/etc/motd"
+    owner: "root"
+    group: "root"
+    mode: "0744"
+  when: etc_motd_src is not defined
+
+- name: MOTD | var defined (src)
+  ansible.builtin.template:
+    src: "{{ etc_motd_src }}"
+    dest: "/etc/motd"
+    owner: "root"
+    group: "root"
+    mode: "0744"
+  when: etc_motd_src is defined
+
+- name: MOTD | Remove RH SPAM
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - /etc/motd.d/cockpit
+    - /etc/motd.d/insights-client
+
+- name: Remove Crontabs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  with_items: "{{ crontabs_removed | default([], true) }}"
+
+- name: Cron | install entries
+  ansible.builtin.copy:
+    content: "{{ (item.value | string | trim) + '\n' }}"
+    dest: "/etc/cron.d/{{ item.key }}"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+  loop: "{{ crontab_entries | default({}, true) | dict2items }}"
+  when: item.value is defined and (item.value | string | trim | length > 0)
+
+- name: Profile | managed files
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (item.src is defined)
+        | ternary(omit, (item.content | default('') | string))
+      }}
+    src: "{{ item.src | default(omit) }}"
+    dest: >-
+      {{
+        item.dest
+        | default('~' ~ (item.user | default('root')) ~ '/' ~ ((item.name | default('') | regex_replace('^/+',''))))
+      }}
+    owner: "{{ item.owner | default(item.user | default('root')) }}"
+    group: "{{ item.group | default(item.owner | default(item.user | default('root'))) }}"
+    mode: "{{ item.mode | default('0644') }}"
+    backup: "{{ item.backup | default(false) }}"
+  loop: "{{ profile_managed_files | default([]) }}"
+  loop_control:
+    label: >-
+      {{ item.dest | default('~' ~ (item.user | default('root')) ~ '/' ~ (item.name | default(''))) }}
+  when: item is mapping and (item.dest is defined or item.name is defined)
+#
+# - name: Profile | edit mode
+#   ansible.builtin.copy:
+#     content: "set editing-mode vi"
+#     dest: /root/.inputrc
+#     mode: "0644"
+#     owner: root
+#     group: root
+#
+# - name: Profile | root dig
+#   ansible.builtin.copy:
+#     content: "+search +short"
+#     dest: /root/.digrc
+#     mode: "0644"
+#     owner: root
+#     group: root
+#
+# - name: Profile | root profile
+#   ansible.builtin.copy:
+#     src: root_bashprofile
+#     dest: /root/.bash_profile
+#     mode: "0644"
+#     owner: root
+#     group: root
+#     backup: true
+#
+# - name: Global Env Profile
+#   ansible.builtin.copy:
+#     src: "{{ item }}"
+#     dest: "/etc/profile.d/{{ item }}"
+#     owner: "root"
+#     group: "root"
+#     mode: "0644"
+#   with_items: "{{ global_profiles | default([], true) }}"

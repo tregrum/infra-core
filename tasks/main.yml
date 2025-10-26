@@ -1,0 +1,25 @@
+---
+- name: Domain Search Fix
+  ansible.builtin.import_tasks: domain.yml
+
+- name: Groups & Accounts
+  ansible.builtin.import_tasks: accounts.yml
+
+- name: Storage
+  ansible.builtin.import_tasks: storage.yml
+
+- name: Packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: Profile
+  ansible.builtin.import_tasks: profile.yml
+
+- name: Kernel
+  ansible.builtin.import_tasks: kernel.yml
+
+- name: Artifacts
+  ansible.builtin.import_tasks: artifacts.yml
+
+- name: Services
+  ansible.builtin.import_tasks: services.yml
+#

@@ -1,0 +1,72 @@
+---
+- name: Network tunables - firewall helper
+  ansible.posix.sysctl:
+    name: "{{ item.param }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  with_items:
+    - { param: "net.ipv4.tcp_keepalive_time", value: "300" }
+    - { param: "net.ipv4.tcp_keepalive_intvl", value: "30" }
+
+- name: Set the max kernel count
+  ansible.builtin.lineinfile:
+    path: "/etc/dnf/dnf.conf"
+    regexp: "^installonly_limit="
+    line: "installonly_limit=2"
+
+- name: Enable Automated DNF Updates
+  when:
+    - updates.install | default(false) | bool
+  block:
+    - name: DNF | install packages
+      ansible.builtin.dnf:
+        name: "dnf-automatic"
+        state: present
+
+    - name: Enable dnfauto downloads
+      ansible.builtin.lineinfile:
+        path: "/etc/dnf/automatic.conf"
+        regexp: "^download_updates"
+        line: "download_updates = yes"
+
+    - name: Enable dnfauto updates
+      ansible.builtin.lineinfile:
+        path: "/etc/dnf/automatic.conf"
+        regexp: "^apply_updates"
+        line: "apply_updates = yes"
+
+    - name: Enable dnfauto reboots
+      ansible.builtin.lineinfile:
+        path: "/etc/dnf/automatic.conf"
+        regexp: "^reboot"
+        line: "reboot = when-needed"
+      when: updates.reboot | default(false) | bool
+
+    - name: Configure DNF Timer Scheduler
+      ansible.builtin.template:
+        src: "dnf-automatic.timer.j2"
+        dest: "/etc/systemd/system/dnf-automatic.timer"
+        owner: "root"
+        group: "root"
+        mode: "0744"
+
+    - name: Enable Timer dnf-automatic
+      ansible.builtin.systemd_service:
+        name: dnf-automatic.timer
+        state: started
+        enabled: true
+
+- name: Ensure NetworkManager wait timeout is 10s
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/10-wait-timeout.conf
+    content: |
+      [connection]
+      wait-device-timeout=10
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart service - NetworkManager
+#

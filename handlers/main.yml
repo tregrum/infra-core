@@ -1,0 +1,37 @@
+---
+- name: Restart service - NetworkManager
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: restarted
+
+- name: Restart service - rsyslog
+  ansible.builtin.systemd:
+    name: rsyslog
+    state: restarted
+
+- name: Restart service - postfix
+  ansible.builtin.systemd:
+    name: postfix
+    state: restarted
+
+- name: Update Trusty CA Certs
+  ansible.builtin.command:
+    cmd: update-ca-trust
+  check_mode: false
+  changed_when: true
+
+- name: Systemd daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: "systemd daemon-reload"
+
+# - name: restart unit
+#   ansible.builtin.systemd:
+#     name: "{{ artifact_unit_name | default('') }}"
+#     state: restarted
+#   listen: "restart unit"
+
+- name: Firewalld reload
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: true
+  listen: "firewalld reload"
