@@ -37,7 +37,7 @@ profile_managed_files_common:
   ]
 
 profile_managed_files_bespoke:
-  [{ user: emmet, name: ".digrc", content: "{{ profile_digrc_content }}" }]
+  [{ user: bender, name: ".digrc", content: "{{ profile_digrc_content }}" }]
 
 profile_managed_files: >-
   {{
@@ -48,12 +48,16 @@ profile_managed_files: >-
 crontabs_removed: []
 updates: {}
 repos_enabled: {}
+dnf_conf_excludepkgs: []
 volume_groups: {}
 local_mounts: {}
 network_mounts: {}
+nfs_exports: {}
+local_groups_enforce_gid: false
 local_groups: {}
 group_members: {}
 local_accounts: {}
+local_path_sets: {}
 local_paths: {}
 crontab_entries: {}
 local_acls: {}

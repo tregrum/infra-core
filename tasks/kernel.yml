@@ -16,10 +16,29 @@
     regexp: "^installonly_limit="
     line: "installonly_limit=2"
 
+- name: DNF | Configure excluded packages
+  ansible.builtin.lineinfile:
+    path: "/etc/dnf/dnf.conf"
+    regexp: "^excludepkgs="
+    line: >-
+      excludepkgs={{
+        dnf_conf_excludepkgs
+        if dnf_conf_excludepkgs is string
+        else dnf_conf_excludepkgs | join(',')
+      }}
+  when:
+    - dnf_conf_excludepkgs | default([], true) | length > 0
+
 - name: Enable Automated DNF Updates
   when:
     - updates.install | default(false) | bool
   block:
+    - name: Validate dnfauto reboot mode
+      ansible.builtin.assert:
+        that:
+          - updates.reboot is not defined or updates.reboot in ['never', 'when-changed', 'when-needed']
+        fail_msg: "updates.reboot must be one of: never, when-changed, when-needed"
+
     - name: DNF | install packages
       ansible.builtin.dnf:
         name: "dnf-automatic"
@@ -37,12 +56,11 @@
         regexp: "^apply_updates"
         line: "apply_updates = yes"
 
-    - name: Enable dnfauto reboots
+    - name: Configure dnfauto reboots
       ansible.builtin.lineinfile:
         path: "/etc/dnf/automatic.conf"
-        regexp: "^reboot"
-        line: "reboot = when-needed"
-      when: updates.reboot | default(false) | bool
+        regexp: "^(#\\s*)?reboot\\s*="
+        line: "reboot = {{ updates.reboot | default('never') }}"
 
     - name: Configure DNF Timer Scheduler
       ansible.builtin.template:

@@ -1,7 +1,22 @@
+- name: Storage | Identify root mount
+  ansible.builtin.set_fact:
+    root_mount: >-
+      {{
+        ansible_mounts
+        | default([], true)
+        | selectattr('mount', 'equalto', '/')
+        | first
+        | default({})
+      }}
+
+- name: Storage | Identify root mount device
+  ansible.builtin.set_fact:
+    root_mount_device: "{{ root_mount.device | default('', true) | trim }}"
+
 - name: LVM | ID root VG
   ansible.builtin.set_fact:
     root_vg: >-
-      {{ (ansible_lvm.lvs | dict2items
+      {{ ((ansible_lvm.lvs | default({}, true)) | dict2items
         |selectattr('key', 'in', ['lvroot', 'root'])
         | map(attribute='value.vg')
         | first) |default(None)
@@ -19,36 +34,70 @@
       }}
   when: root_vg is defined and root_vg is not none
 
-- name: LVM | Derive root disk device
+- name: Storage | Classify root filesystem
   ansible.builtin.set_fact:
-    # allow explicit override via group_vars.root_disk, otherwise strip
-    # partition suffixes (supports /dev/sd*, /dev/nvme*, /dev/mmcblk*, /dev/vd*)
+    root_is_lvm: >-
+      {{
+        (
+          root_vg is defined and root_vg is not none
+        )
+        or
+        (
+          root_mount_device | length > 0
+          and root_mount_device is match('^/dev/mapper/')
+        )
+      }}
+
+- name: Storage | Derive root disk device
+  ansible.builtin.set_fact:
+    # allow explicit override via group_vars.root_disk. Otherwise prefer the
+    # LVM PV when root is on LVM, and fall back to the mounted root block
+    # device for plain partition-backed roots.
     root_sd: >-
       {{ (
           (root_disk | default('', true))
           if (root_disk | default('', true) | string | trim | length > 0)
-          else (root_pv | default('') | regex_replace('p?[0-9]+$',''))
+          else (
+            (
+              root_pv
+              if (
+                root_is_lvm | default(false) | bool
+                and root_pv is defined
+                and root_pv is not none
+                and root_pv | string | trim | length > 0
+              )
+              else root_mount_device
+            )
+            | default('')
+            | regex_replace('p?[0-9]+$','')
+          )
         ) | trim
       }}
-  when:
-    - root_vg is defined and root_vg is not none
-    - root_pv is defined and root_pv is not none
-    - root_pv | string | length > 0
 
-- name: LVM | root VG, PV, and disk device
+- name: Storage | root mount, VG, PV, and disk device
   ansible.builtin.debug:
-    msg: "root vg: {{ root_vg }}, root pv: {{ root_pv }}, root disk: {{ root_sd | default('unknown', true) }}"
+    msg: >-
+      root mount: {{ root_mount_device | default('unknown', true) }},
+      root vg: {{ root_vg | default('none', true) }},
+      root pv: {{ root_pv | default('none', true) }},
+      root disk: {{ root_sd | default('unknown', true) }},
+      root is lvm: {{ root_is_lvm | default(false) | bool }}
 
 - name: LVM | Fix Unresized root PV
   ansible.builtin.include_tasks: "lvm_rootpv.yml"
   when:
     - fix_root_pv | default(false) | bool
+    - root_is_lvm | default(false) | bool
+    - root_vg is defined
+    - root_vg is not none
+    - root_pv is defined
+    - root_pv is not none
     - root_sd is defined
     - (root_sd | default('')) | length > 0
 
 - name: LVM | Inventory vgs
   ansible.builtin.set_fact:
-    lsvgs: "{{ ansible_lvm.vgs | list | default([]) }}"
+    lsvgs: "{{ ansible_lvm.vgs | default({}, true) | list | default([]) }}"
     datavgs: "{{ volume_groups | combine(volume_groups | default({})) | list | default([]) }}"
 
 - name: LVM | List missing data vgs
@@ -65,12 +114,73 @@
   when:
     - local_mounts | default({}, true) | length > 0
 
+- name: Network Filesystem | mount
+  ansible.builtin.include_tasks: "network_mounts.yml"
+  when:
+    - network_mounts | default({}, true) | length > 0
+
+- name: NFS | export
+  ansible.builtin.include_tasks: "nfs_exports.yml"
+  when:
+    - nfs_exports | default({}, true) | length > 0
+
+- name: Path | validate path sets
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.paths is defined
+      - item.value.paths is sequence
+      - item.value.paths is not string
+      - item.value.paths | length > 0
+      - >-
+        (
+          item.value.paths
+          | select('string')
+          | map('trim')
+          | reject('equalto', '')
+          | reject('match', '^/')
+          | list
+          | length
+        ) == 0
+      - item.value.owner is not defined or (item.value.owner | string | trim | length > 0)
+      - item.value.group is not defined or (item.value.group | string | trim | length > 0)
+      - item.value.mode is not defined or (item.value.mode | string | trim | length > 0)
+    fail_msg: >-
+      local_path_sets['{{ item.key }}'] must define a non-empty list of
+      absolute paths plus optional non-empty owner, group, and mode.
+  loop: "{{ local_path_sets | default({}, true) | dict2items }}"
+
+- name: Path | initialize normalized paths
+  ansible.builtin.set_fact:
+    local_paths_normalized: "{{ local_paths | default({}, true) }}"
+
+- name: Path | expand path sets
+  ansible.builtin.set_fact:
+    local_paths_normalized: "{{ local_paths_normalized | combine(expanded_paths, recursive=true) }}"
+  loop: "{{ local_path_sets | default({}, true) | dict2items }}"
+  vars:
+    expanded_paths: >-
+      {%- set out = {} -%}
+      {%- for path_value in item.value.paths | map('trim') -%}
+      {%- set key_name = item.key ~ '__' ~ loop.index0 -%}
+      {%- set _ = out.update({
+          key_name: {
+            'path': path_value,
+            'state': 'directory',
+            'owner': item.value.owner | default('root'),
+            'group': item.value.group | default('root'),
+            'mode': item.value.mode | default('0755')
+          }
+        }) -%}
+      {%- endfor -%}
+      {{ out | to_json | from_json }}
+
 - name: Path | create
   ansible.builtin.file:
     path: "{{ item.value.path }}"
-    state: directory
-    mode: "{{ item.value.mode }}"
-    owner: "{{ item.value.owner }}"
-    group: "{{ item.value.group }}"
-  with_dict: "{{ local_paths | default({}, true) }}"
+    state: "{{ item.value.state | default('directory') }}"
+    mode: "{{ item.value.mode | default('0755') }}"
+    owner: "{{ item.value.owner | default('root') }}"
+    group: "{{ item.value.group | default('root') }}"
+  with_dict: "{{ local_paths_normalized | default({}, true) }}"
 #

@@ -1,0 +1,17 @@
+- name: Network Filesystem | create mount path
+  ansible.builtin.file:
+    path: "{{ item.value.path }}"
+    state: directory
+    owner: "{{ item.value.owner | default('root') }}"
+    group: "{{ item.value.group | default('root') }}"
+    mode: "{{ item.value.mode | default('0755') }}"
+  with_dict: "{{ network_mounts | default({}, true) }}"
+
+- name: Network Filesystem | mount
+  ansible.posix.mount:
+    name: "{{ item.value.path }}"
+    src: "{{ item.value.src }}"
+    fstype: "{{ item.value.fs | default('nfs') }}"
+    opts: "{{ item.value.fsopts | default('defaults,_netdev') }}"
+    state: mounted
+  with_dict: "{{ network_mounts | default({}, true) }}"

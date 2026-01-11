@@ -30,6 +30,12 @@
         | list
       }}
 
+- name: LVM | debug root and candidate disks
+  ansible.builtin.debug:
+    msg:
+      - "root disk id: {{ root_sd_id | default('unknown', true) }}"
+      - "free disk ids: {{ free_disk_ids | default([], true) }}"
+
 - name: Validate user-specified pv/device values exist in discovered devices
   ansible.builtin.fail:
     msg: >-

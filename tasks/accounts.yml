@@ -1,14 +1,88 @@
-- name: Group exists
+- name: Accounts | validate local group definitions
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.name is not defined or (item.value.name | string | trim | length > 0)
+      - item.value.gid is not defined or ((item.value.gid | string) is match('^[0-9]+$'))
+    fail_msg: >-
+      local_groups['{{ item.key }}'] must be a mapping and may only define a
+      non-empty name and numeric gid.
+  loop: "{{ local_groups | default({}, true) | dict2items }}"
+
+- name: Accounts | validate group membership definitions
+  ansible.builtin.assert:
+    that:
+      - item.value is sequence
+      - item.value is not string
+    fail_msg: >-
+      group_members['{{ item.key }}'] must be a list of usernames.
+  loop: "{{ group_members | default({}, true) | dict2items }}"
+
+- name: Accounts | validate local account definitions
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.name is defined
+      - item.value.name | string | trim | length > 0
+      - item.value.uid is not defined or ((item.value.uid | string) is match('^[0-9]+$'))
+      - item.value.home is not defined or (item.value.home | string | trim | length > 0)
+    fail_msg: >-
+      local_accounts['{{ item.key }}'] must be a mapping with a non-empty name.
+      Optional uid must be numeric and home must be non-empty when set.
+  loop: "{{ local_accounts | default({}, true) | dict2items }}"
+
+- name: Accounts | lookup local groups
+  ansible.builtin.getent:
+    database: group
+    key: '{{ item.value.name | default(item.key) }}'
+    fail_key: false
+  loop: "{{ local_groups | default({}, true) | dict2items }}"
+  register: local_groups_getent
+
+- name: Accounts | create missing groups
   ansible.builtin.group:
-    name: '{{ item }}'
+    name: '{{ item.value.name | default(item.key) }}'
+    gid: '{{ item.value.gid | default(omit) }}'
     state: present
-  with_items: '{{ local_groups | default([], true) }}'
+  loop: "{{ local_groups | default({}, true) | dict2items }}"
+  when: >-
+    (
+      local_groups_getent.results[ansible_loop.index0].ansible_facts.getent_group
+      | default({})
+    )[item.value.name | default(item.key)] | default(None) is none
+  loop_control:
+    extended: true
+
+- name: Accounts | validate existing group gids
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          local_groups_getent.results[ansible_loop.index0].ansible_facts.getent_group
+          [item.value.name | default(item.key)][1] | int
+        ) == (item.value.gid | int)
+    fail_msg: >-
+      Existing group '{{ item.value.name | default(item.key) }}' has gid {{
+      local_groups_getent.results[ansible_loop.index0].ansible_facts.getent_group
+      [item.value.name | default(item.key)][1]
+      }}, expected {{ item.value.gid }}.
+  loop: "{{ local_groups | default({}, true) | dict2items }}"
+  when:
+    - local_groups_enforce_gid | default(false) | bool
+    - item.value.gid is defined
+    - >-
+      (
+        local_groups_getent.results[ansible_loop.index0].ansible_facts.getent_group
+        | default({})
+      )[item.value.name | default(item.key)] | default(None) is not none
+  loop_control:
+    extended: true
 
 - name: Accounts | user add
   ansible.builtin.user:
     name: '{{ item.value.name }}'
-    uid: '{{ item.value.uid }}'
-    home: '{{ item.value.home }}'
+    uid: '{{ item.value.uid | default(omit) }}'
+    home: '{{ item.value.home | default(omit) }}'
     password: '{{ item.value.password | default(omit) }}'
     create_home: '{{ item.value.create_home | default(omit) }}'
     group: '{{ item.value.group | default(omit) }}'
@@ -25,7 +99,7 @@
     groups: '{{ item.0.key }}'
     append: true
   loop: "{{ group_members | dict2items | subelements('value') }}"
-  when: group_members is defined
+  when: group_members | default({}, true) | length > 0
 
 - name: Sudoers Create
   community.general.sudoers:

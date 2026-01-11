@@ -1,0 +1,32 @@
+- name: NFS | install server package
+  ansible.builtin.dnf:
+    name: "nfs-utils"
+    state: present
+
+- name: NFS | ensure export paths exist
+  ansible.builtin.file:
+    path: "{{ item.value.path }}"
+    state: directory
+    owner: "{{ item.value.owner | default('root') }}"
+    group: "{{ item.value.group | default('root') }}"
+    mode: "{{ item.value.mode | default('0755') }}"
+  with_dict: "{{ nfs_exports | default({}, true) }}"
+
+- name: NFS | configure exports
+  ansible.builtin.copy:
+    dest: "/etc/exports.d/infra-core.exports"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+    content: |
+      # Managed by infra-core
+      {% for export in nfs_exports | default({}, true) | dict2items %}
+      {{ export.value.path }} {{ export.value.clients if export.value.clients is string else export.value.clients | join(' ') }}
+      {% endfor %}
+  notify: Reload NFS exports
+
+- name: NFS | enable server service
+  ansible.builtin.systemd:
+    name: "nfs-server"
+    enabled: true
+    state: started

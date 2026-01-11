@@ -1,3 +1,13 @@
+- name: LVM | validate mount VG inputs
+  ansible.builtin.assert:
+    that:
+      - item.value.vg is defined or (root_vg is defined and root_vg is not none)
+    fail_msg: >-
+      local_mounts['{{ item.key }}'] must define a vg when the root filesystem
+      is not backed by LVM.
+  with_dict: "{{ local_mounts | default({}, true) }}"
+  when: local_mounts | default({}, true) | length > 0
+
 - name: LVM | debug info
   ansible.builtin.debug:
     msg:
