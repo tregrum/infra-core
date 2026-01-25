@@ -3,6 +3,9 @@
   ansible.posix.selinux:
     state: "{{ selinux_config }}"
     policy: "targeted"
+  when:
+    - selinux_config is defined
+    - selinux_config | string | trim | length > 0
 
 - name: Services disabled
   ansible.builtin.systemd:

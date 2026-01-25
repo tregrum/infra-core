@@ -11,6 +11,11 @@ fix_root_pv: false
 # ca_file:
 # force_orgca:
 #
+kernel_sysctl_settings:
+  - { param: "net.ipv4.tcp_keepalive_time", value: "300" }
+  - { param: "net.ipv4.tcp_keepalive_intvl", value: "30" }
+dnf_installonly_limit: 2
+networkmanager_wait_device_timeout: 10
 packages_installed: []
 packages_installed_extra: []
 packages_uninstalled: []
@@ -36,8 +41,7 @@ profile_managed_files_common:
     { user: root, name: ".digrc", content: "{{ profile_digrc_content }}" },
   ]
 
-profile_managed_files_bespoke:
-  [{ user: bender, name: ".digrc", content: "{{ profile_digrc_content }}" }]
+profile_managed_files_bespoke: []
 
 profile_managed_files: >-
   {{

@@ -154,36 +154,36 @@ updates:
 
 `profile_managed_files` now merges `profile_managed_files_common` (baseline entries) with `profile_managed_files_bespoke`. Override either list—or replace the merged variable entirely—when you need host-, role-, or environment-specific shells and dotfiles. Templates continue to support both inline `content` and `src` pointers.
 
-## Worfklow
-
-### Bootstrap a new environment repo
-
-Assumes you have ansible & git installed.
-
-1. Copy `new-infra-env.sh` into a new folder
-2. Optionally review and edit script env items
-3. Run bootstrap script: `new-infra-env.sh infra-app-abc123`
-4. Customize environment hostnames `inventory/all.inv`
-5. Customize environment variable `inventory/group_vars/all.yml`
-6. Run ansible playbook: `./playbook.yml`
+## Workflow
 
 ### Updating infra-core
 
 ```bash
 cd /path/to/infra-core
 git add .
-git commit -m'a new commit'
+git commit -m "a new commit"
 git push origin main
 git tag v1.3.0
 git push origin main --tags
 ```
 
-### Updating infra-<abc123
+### Updating infra-<my_env>
 
 ```bash
-cd /path/to/infra-<abc123>
-cd core && git fetch && git checkout v1.3.0
-cd .. && git add core && git commit -m "Update infra-core to v1.3.0"
+cd /path/to/infra-<my_env>
+./core/files/infra-core-util.sh update v1.3.0 .
+git status
+git diff --submodule
+git add core
+git commit -m "Update infra-core to v1.3.0"
 ```
 
+### Creating infra-<my_env>
 
+```bash
+/path/to/infra-core/files/infra-core-util.sh create infra-my-env [/path/to/infra-core or url] [/path/to/workdir] [v1.3.0]
+cd /path/to/workdir/infra-my-env
+git status
+git add .
+git commit -m "Initial environment scaffold"
+```

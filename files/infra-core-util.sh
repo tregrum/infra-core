@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-
-DEFAULT_CORE_REPO='https://github.com/tregrum/infra-core'
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DEFAULT_CORE_REPO_FALLBACK='https://github.com/tregrum/infra-core'
 
 usage() {
   cat <<EOF_USAGE
@@ -19,7 +19,8 @@ Commands:
   help     Show this help text.
 
 Notes:
-  - create defaults infra-core source to: ${DEFAULT_CORE_REPO}
+  - create defaults infra-core source to this repo's origin fetch URL when available
+  - create fallback core source is: ${DEFAULT_CORE_REPO_FALLBACK}
   - update and version operate on the current directory unless env_repo_dir is provided
   - update never commits changes; it prints suggested next steps instead
 EOF_USAGE
@@ -29,6 +30,17 @@ require_git() {
   if ! command -v git >/dev/null 2>&1; then
     echo "git is required" >&2
     exit 1
+  fi
+}
+
+default_core_repo() {
+  local script_repo_root
+  script_repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)
+
+  if [[ -n "$script_repo_root" ]]; then
+    git -C "$script_repo_root" remote get-url origin 2>/dev/null || echo "$DEFAULT_CORE_REPO_FALLBACK"
+  else
+    echo "$DEFAULT_CORE_REPO_FALLBACK"
   fi
 }
 
@@ -60,7 +72,7 @@ core_describe() {
 
 create_env_repo() {
   local env_repo_name=${1:-}
-  local core_source=${2:-$DEFAULT_CORE_REPO}
+  local core_source=${2:-$(default_core_repo)}
   local dest_root=${3:-.}
   local requested_ref=${4:-}
   local dest_root_abs env_root core_arg
@@ -429,7 +441,7 @@ main() {
   case "$command" in
     create)
       shift
-      create_env_repo "${1:-}" "${2:-$DEFAULT_CORE_REPO}" "${3:-.}" "${4:-}"
+      create_env_repo "${1:-}" "${2:-$(default_core_repo)}" "${3:-.}" "${4:-}"
       ;;
     update)
       shift

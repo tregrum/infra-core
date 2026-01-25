@@ -6,15 +6,15 @@
     sysctl_set: true
     state: present
     reload: true
-  with_items:
-    - { param: "net.ipv4.tcp_keepalive_time", value: "300" }
-    - { param: "net.ipv4.tcp_keepalive_intvl", value: "30" }
+  loop: "{{ kernel_sysctl_settings | default([], true) }}"
+  when: kernel_sysctl_settings | default([], true) | length > 0
 
 - name: Set the max kernel count
   ansible.builtin.lineinfile:
     path: "/etc/dnf/dnf.conf"
     regexp: "^installonly_limit="
-    line: "installonly_limit=2"
+    line: "installonly_limit={{ dnf_installonly_limit }}"
+  when: dnf_installonly_limit is defined
 
 - name: DNF | Configure excluded packages
   ansible.builtin.lineinfile:
@@ -76,15 +76,16 @@
         state: started
         enabled: true
 
-- name: Ensure NetworkManager wait timeout is 10s
+- name: Ensure NetworkManager wait timeout is configured
   become: true
   ansible.builtin.copy:
     dest: /etc/NetworkManager/conf.d/10-wait-timeout.conf
     content: |
       [connection]
-      wait-device-timeout=10
+      wait-device-timeout={{ networkmanager_wait_device_timeout }}
     owner: root
     group: root
     mode: "0644"
   notify: Restart service - NetworkManager
+  when: networkmanager_wait_device_timeout is defined
 #
