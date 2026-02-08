@@ -25,18 +25,7 @@
     - host_class == "vmware"
     - dns_domain_search is defined
     - dns_domain_search | string | trim | length > 0
-  notify: Restart service - NetworkManager
-
-- name: Fix Missing Cert Authority | Install CA
-  ansible.builtin.copy:
-    src: "files/{{ ca_file }}"
-    dest: "/etc/pki/ca-trust/source/anchors/{{ ca_file }}"
-    owner: root
-    group: root
-    mode: '0644'
-    force: "{{ force_orgca | default(omit) }}"
-  notify: Update Trusty CA Certs
-  when: ca_file is defined
+  notify: Restart NetworkManager
 
 - name: Set timezone
   become: true
@@ -45,6 +34,3 @@
   when:
     - timezone is defined
     - timezone | string | trim | length > 0
-
-- name: Flush Handlers
-  ansible.builtin.meta: flush_handlers

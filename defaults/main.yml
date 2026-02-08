@@ -3,13 +3,6 @@
 # Defaults
 #
 fix_root_pv: false
-# sudoers_group:
-# mail_relay:
-# dns_domain_search:
-# selinux_config:
-# timezone:
-# ca_file:
-# force_orgca:
 #
 kernel_sysctl_settings:
   - { param: "net.ipv4.tcp_keepalive_time", value: "300" }
@@ -49,7 +42,17 @@ profile_managed_files: >-
     + (profile_managed_files_bespoke | default([], true))
   }}
 
+paths_absent_default:
+  - "/etc/motd.d/cockpit"
+  - "/etc/motd.d/insights-client"
+paths_absent: []
 crontabs_removed: []
+paths_absent_merged: >-
+  {{
+    (paths_absent_default | default([], true))
+    + (crontabs_removed | default([], true))
+    + (paths_absent | default([], true))
+  }}
 updates: {}
 repos_enabled: {}
 dnf_conf_excludepkgs: []
@@ -66,7 +69,30 @@ local_paths: {}
 crontab_entries: {}
 local_acls: {}
 #
+artifact_notify_map_default:
+  update_ca_trust: "Update CA Trust"
+  systemd_daemon_reload: "Systemd daemon-reload"
+  reload_firewalld: "Reload firewalld"
+  reload_nfs_exports: "Reload NFS exports"
+  restart_networkmanager: "Restart NetworkManager"
+  restart_postfix: "Restart Postfix"
+  restart_rsyslog: "Restart rsyslog"
+  restart_autofs: "Restart autofs"
+  restart_sssd: "Restart sssd"
+  restart_httpd: "Restart httpd"
+  restart_nginx: "Restart nginx"
+  restart_crond: "Restart crond"
+  restart_sshd: "Restart sshd"
+artifact_notify_map: {}
+artifact_notify_map_merged: >-
+  {{
+    (artifact_notify_map_default | default({}, true))
+    | combine(artifact_notify_map | default({}, true), recursive=true)
+  }}
+
 artifacts_root: "{{ inventory_dir }}/artifacts"
+artifacts_pre: [] # bootstrap/prereq artifacts that must run before packages
+artifacts_pre_merged: "{{ artifacts_pre | default([], true) }}"
 artifacts_common: [] # shared everywhere
 artifacts_env: [] # from group_vars/<env>.yml
 artifacts_role: [] # from group_vars/<role>.yml

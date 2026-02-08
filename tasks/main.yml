@@ -8,6 +8,9 @@
 - name: Storage
   ansible.builtin.import_tasks: storage.yml
 
+- name: Artifacts Pre
+  ansible.builtin.import_tasks: artifacts_pre.yml
+
 - name: Packages
   ansible.builtin.import_tasks: packages.yml
 

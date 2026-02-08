@@ -52,6 +52,25 @@ Drop files into whichever layer fits (inventory artifacts, per-role files, or an
 
 Use the existing flat `copy`, `template`, `directory`, `link`, `sync`, and `archive` artifact entries for one-off items. When you have a small cluster of files that all share the same source directory, target directory, and ownership/mode, use `copy_set` to keep `group_vars` compact. When you need to copy a whole directory tree, use `copy_tree`.
 
+If a file is a prerequisite for later package or network operations, place it in `artifacts_pre` instead of the normal artifact layers. `artifacts_pre` runs earlier in the role and flushes handlers before package tasks continue.
+
+Example:
+
+```yaml
+artifacts_pre:
+  - type: copy
+    src: "ca/orgca.pem"
+    dest: "/etc/pki/ca-trust/source/anchors/orgca.pem"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+    force: false
+    notify:
+      - update_ca_trust
+```
+
+For `copy` artifacts, `force: false` gives you seed-only behavior: the role creates the file if it is missing, but does not overwrite an existing destination.
+
 Example:
 
 ```yaml
@@ -86,6 +105,29 @@ artifacts_common:
 ```
 
 `copy_tree` copies the named source directory and its contents into `dest_dir`, so the example above results in `/var/app/abc/...`. Sources are resolved using the same `{{ artifacts_root }}` then `{{ artifacts_root }}/files` fallback pattern as `copy_set`. The copy is additive; it does not prune remote files.
+
+Artifact items may also declare `notify` aliases to trigger supported handlers when a file changes:
+
+```yaml
+artifacts_common:
+  - type: copy
+    src: "ca/orgca.pem"
+    dest: "/etc/pki/ca-trust/source/anchors/orgca.pem"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+    notify:
+      - update_ca_trust
+```
+
+Built-in aliases include common actions such as `update_ca_trust`, `systemd_daemon_reload`, `reload_firewalld`, `reload_nfs_exports`, `restart_networkmanager`, `restart_postfix`, `restart_rsyslog`, `restart_sssd`, `restart_httpd`, and `restart_nginx`.
+
+Downstream repos can extend the built-in alias map by adding entries to `artifact_notify_map` and defining matching handlers in their own play or companion role:
+
+```yaml
+artifact_notify_map:
+  restart_myapp: "Restart myapp"
+```
 
 ### Storage Mounts
 
@@ -125,6 +167,16 @@ local_path_sets:
 
 `local_path_sets` normalizes into ordinary `local_paths` entries during the role run.
 
+For controlled file removals, use `paths_absent`. Entries must be absolute paths, and the role rejects a small set of high-risk root directories. Existing directories are also rejected so this list stays file-oriented.
+
+Example:
+
+```yaml
+paths_absent:
+  - "/etc/cron.d/oldjob"
+  - "/etc/motd.d/custom-banner"
+```
+
 Example NFS server export:
 
 ```yaml
@@ -154,6 +206,36 @@ updates:
 
 `profile_managed_files` now merges `profile_managed_files_common` (baseline entries) with `profile_managed_files_bespoke`. Override either list—or replace the merged variable entirely—when you need host-, role-, or environment-specific shells and dotfiles. Templates continue to support both inline `content` and `src` pointers.
 
+### Using Ansible Vault
+
+This role does not need any special secret-handling logic. Keep the public variable structure readable in your normal `group_vars` files, and place only the actual secret leaf values in a vaulted file.
+
+Example:
+
+```yaml
+# group_vars/all.yml
+repo_auth:
+  username: "svc_repo"
+  password: "{{ vault_repo_auth_password }}"
+
+ldap_bind:
+  dn: "CN=svc-ldap,OU=Service Accounts,DC=example,DC=com"
+  password: "{{ vault_ldap_bind_password }}"
+```
+
+```yaml
+# group_vars/vault.yml
+vault_repo_auth_password: !vault |
+  $ANSIBLE_VAULT;1.1;AES256
+  ...
+
+vault_ldap_bind_password: !vault |
+  $ANSIBLE_VAULT;1.1;AES256
+  ...
+```
+
+That pattern keeps inventory data approachable for other operators while still protecting the values that actually need encryption.
+
 ## Workflow
 
 ### Updating infra-core
@@ -163,7 +245,7 @@ cd /path/to/infra-core
 git add .
 git commit -m "a new commit"
 git push origin main
-git tag v1.3.0
+git tag v1.6.0
 git push origin main --tags
 ```
 
@@ -171,17 +253,17 @@ git push origin main --tags
 
 ```bash
 cd /path/to/infra-<my_env>
-./core/files/infra-core-util.sh update v1.3.0 .
+./core/files/infra-core-util.sh update v1.6.0 .
 git status
 git diff --submodule
 git add core
-git commit -m "Update infra-core to v1.3.0"
+git commit -m "Update infra-core to v1.6.0"
 ```
 
 ### Creating infra-<my_env>
 
 ```bash
-/path/to/infra-core/files/infra-core-util.sh create infra-my-env [/path/to/infra-core or url] [/path/to/workdir] [v1.3.0]
+/path/to/infra-core/files/infra-core-util.sh create infra-my-env [/path/to/infra-core or url] [/path/to/workdir] [v1.6.0]
 cd /path/to/workdir/infra-my-env
 git status
 git add .

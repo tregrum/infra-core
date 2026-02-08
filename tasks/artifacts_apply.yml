@@ -1,0 +1,380 @@
+# tasks/artifacts_apply.yml
+# Generic, data-driven artifact deployment for the currently active artifact list.
+#
+
+- name: Artifacts | validate notify aliases
+  ansible.builtin.assert:
+    that:
+      - item.type is defined
+      - item.notify is string or (item.notify is sequence and item.notify is not string)
+      - >-
+        (
+          (
+            [item.notify]
+            if item.notify is string
+            else item.notify
+          )
+          | map('string')
+          | map('trim')
+          | reject('equalto', '')
+          | difference(artifact_notify_map_merged.keys() | list)
+          | length
+        ) == 0
+    fail_msg: >-
+      Artifact '{{ item.name | default(item.dest | default(item.dest_dir | default(item.src | default(item.src_dir | default('unnamed'))))) }}'
+      uses unsupported notify aliases. Supported aliases are:
+      {{ artifact_notify_map_merged.keys() | sort | join(', ') }}.
+  loop: "{{ artifacts_active | selectattr('notify', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name | default(item.dest | default(item.dest_dir | default(item.src | default(item.src_dir | default('unnamed'))))) }}"
+
+- name: Artifacts | validate copy_set definitions
+  ansible.builtin.assert:
+    that:
+      - item.src_dir is defined
+      - item.src_dir | string | trim | length > 0
+      - item.dest_dir is defined
+      - item.dest_dir | string | trim | length > 0
+      - (item.dest_dir | string) is match('^/')
+      - item.files is defined
+      - item.files is sequence
+      - item.files is not string
+      - item.files | length > 0
+      - >-
+        (
+          item.files
+          | select('string')
+          | map('trim')
+          | reject('equalto', '')
+          | reject('match', '^/')
+          | reject('search', '\\.\\.')
+          | list
+          | length
+        ) == (item.files | length)
+    fail_msg: >-
+      copy_set '{{ item.name | default(item.dest_dir) }}' must define non-empty
+      src_dir, absolute dest_dir, and a non-empty list of relative file names.
+  loop: "{{ artifacts_active | selectattr('type', 'equalto', 'copy_set') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest_dir) }}" }
+
+- name: Artifacts | validate copy_tree definitions
+  ansible.builtin.assert:
+    that:
+      - item.src_dir is defined
+      - item.src_dir | string | trim | length > 0
+      - item.dest_dir is defined
+      - item.dest_dir | string | trim | length > 0
+      - (item.dest_dir | string) is match('^/')
+      - item.src_dir | string | trim is not match('^/')
+      - item.src_dir | string | trim is not search('\\.\\.')
+      - item.mode is not defined or (item.mode | string | trim | length > 0)
+      - item.dir_mode is not defined or (item.dir_mode | string | trim | length > 0)
+    fail_msg: >-
+      copy_tree '{{ item.name | default(item.dest_dir) }}' must define a
+      relative src_dir, an absolute dest_dir, and optional non-empty mode and
+      dir_mode values.
+  loop: "{{ artifacts_active | selectattr('type', 'equalto', 'copy_tree') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest_dir) }}" }
+
+- name: Artifacts | initialize normalized items
+  ansible.builtin.set_fact:
+    artifacts_normalized: >-
+      {{
+        artifacts_active
+        | rejectattr('type', 'equalto', 'copy_set')
+        | rejectattr('type', 'equalto', 'copy_tree')
+        | list
+      }}
+
+- name: Artifacts | append expanded copy_set entries
+  ansible.builtin.set_fact:
+    artifacts_normalized: "{{ artifacts_normalized + expanded_items }}"
+  loop: "{{ artifacts_active | selectattr('type', 'equalto', 'copy_set') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest_dir) }}" }
+  vars:
+    expanded_items: >-
+      {%- set out = [] -%}
+      {%- set src_prefix = item.src_dir | regex_replace('/+$', '') -%}
+      {%- set dest_prefix = item.dest_dir | regex_replace('/+$', '') -%}
+      {%- for filename in item.files | map('trim') -%}
+      {%- set _ = out.append({
+          'type': 'copy',
+          'name': (item.name | default(dest_prefix)) ~ ' :: ' ~ filename,
+          'src': src_prefix ~ '/' ~ filename,
+          'dest': dest_prefix ~ '/' ~ filename,
+          'owner': item.owner | default('root'),
+          'group': item.group | default('root'),
+          'mode': item.mode | default('0644'),
+          '_notify_handlers': (
+            (
+              [item.notify]
+              if (item.notify is defined and item.notify is string)
+              else (item.notify | default([]))
+            )
+            | map('extract', artifact_notify_map_merged)
+            | list
+          )
+        }) -%}
+      {%- endfor -%}
+      {{ out | to_json | from_json }}
+
+- name: Ensure parent directories exist
+  ansible.builtin.file:
+    path: "{{ item.dest | dirname }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ artifacts_normalized | selectattr('type', 'in', ['copy', 'template']) | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+
+- name: Deploy artifacts (copy files)
+  ansible.builtin.copy:
+    src: >-
+      {{
+        lookup('ansible.builtin.first_found', {
+          'files': [item.src],
+          'paths': [artifacts_root, artifacts_root ~ '/files']
+        })
+      }}
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    force: "{{ item.force | default(omit) }}"
+    backup: false
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'copy') | rejectattr('content', 'defined') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_copy
+
+- name: Deploy artifacts (copy inline content)
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    force: "{{ item.force | default(omit) }}"
+    backup: false
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'copy') | selectattr('content', 'defined') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_copy_inline
+
+- name: Deploy artifacts (template)
+  ansible.builtin.template:
+    src: "{{ artifacts_root }}/templates/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    backup: false
+    validate: "{{ item.validate | default(omit) }}"
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'template') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_template
+
+- name: Ensure directories
+  ansible.builtin.file:
+    path: "{{ item.dest }}"
+    state: directory
+    mode: "{{ item.mode | default('0755') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'directory') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+
+- name: Deploy artifact trees
+  ansible.builtin.copy:
+    src: >-
+      {{
+        lookup('ansible.builtin.first_found', {
+          'files': [item.src_dir | regex_replace('/+$', '')],
+          'paths': [artifacts_root, artifacts_root ~ '/files']
+        })
+      }}
+    dest: "{{ item.dest_dir | regex_replace('/+$', '') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default(omit) }}"
+    directory_mode: "{{ item.dir_mode | default('0755') }}"
+    backup: false
+  notify: >-
+    {{
+      (
+        [item.notify]
+        if (item.notify is defined and item.notify is string)
+        else (item.notify | default([]))
+      )
+      | map('extract', artifact_notify_map_merged)
+      | list
+    }}
+  loop: "{{ artifacts_active | selectattr('type', 'equalto', 'copy_tree') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest_dir) }}" }
+  register: artifacts_copy_tree
+
+- name: Create symlinks
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    owner: "{{ item.owner | default(omit) }}"
+    group: "{{ item.group | default(omit) }}"
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'link') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+
+- name: Sync artifact trees (optional)
+  ansible.posix.synchronize:
+    src: "{{ artifacts_root }}/sync/{{ item.src_dir }}/"
+    dest: "{{ item.dest | regex_replace('/+$', '') }}/"
+    archive: true
+    delete: "{{ item.delete | default(false) }}"
+    compress: true
+    rsync_opts: "{{ item.rsync_opts | default([]) }}"
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'sync') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_sync
+  when: (artifacts_normalized | selectattr('type', 'equalto', 'sync') | list | length) > 0
+
+- name: Extract archives (optional)
+  ansible.builtin.unarchive:
+    src: "{{ artifacts_root }}/archives/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    remote_src: false
+    extra_opts: >-
+      {{
+        []
+        + (['--strip-components=' ~ (item.strip | int)] if item.strip is defined else [])
+        + (item.include | default([]) | map('regex_replace','^(.*)$','--include=\\1') | list)
+        + (item.exclude | default([]) | map('regex_replace','^(.*)$','--exclude=\\1') | list)
+      }}
+  notify: >-
+    {{
+      (
+        item._notify_handlers
+        if item._notify_handlers is defined
+        else (
+          (
+            [item.notify]
+            if (item.notify is defined and item.notify is string)
+            else (item.notify | default([]))
+          )
+          | map('extract', artifact_notify_map_merged)
+          | list
+        )
+      )
+    }}
+  loop: "{{ artifacts_normalized | selectattr('type', 'equalto', 'archive') | list }}"
+  loop_control: { label: "{{ item.name | default(item.dest) }}" }
+  register: artifacts_archive
+  when: (artifacts_normalized | selectattr('type', 'equalto', 'archive') | list | length) > 0
+
+- name: Collect changed artifact items
+  ansible.builtin.set_fact:
+    _artifacts_changed: >-
+      {{
+        (
+          (artifacts_copy.results        | default([])) +
+          (artifacts_copy_inline.results | default([])) +
+          (artifacts_template.results    | default([])) +
+          (artifacts_copy_tree.results   | default([])) +
+          (artifacts_sync.results        | default([])) +
+          (artifacts_archive.results     | default([]))
+        )
+        | selectattr('changed', 'defined') | selectattr('changed')
+        | map(attribute='item') | list
+      }}
+  changed_when: false

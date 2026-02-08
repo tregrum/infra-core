@@ -18,19 +18,41 @@
     mode: "0744"
   when: etc_motd_src is defined
 
-- name: MOTD | Remove RH SPAM
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  with_items:
-    - /etc/motd.d/cockpit
-    - /etc/motd.d/insights-client
+- name: Paths | validate absent targets
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | trim | length > 0
+      - item is match('^/')
+      - item not in ['/', '/etc', '/var', '/usr', '/home', '/root', '/opt', '/srv']
+    fail_msg: >-
+      paths_absent entries must be non-empty absolute file paths and may not
+      target high-risk root directories.
+  loop: "{{ paths_absent_merged | default([], true) }}"
 
-- name: Remove Crontabs
+- name: Paths | stat absent targets
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ paths_absent_merged | default([], true) }}"
+  register: paths_absent_stat
+
+- name: Paths | reject existing directories from absent list
+  ansible.builtin.assert:
+    that:
+      - not (paths_absent_stat.results[ansible_loop.index0].stat.exists | default(false))
+        or not (paths_absent_stat.results[ansible_loop.index0].stat.isdir | default(false))
+    fail_msg: >-
+      paths_absent target '{{ item }}' currently exists as a directory. This
+      list is intended for file targets only.
+  loop: "{{ paths_absent_merged | default([], true) }}"
+  loop_control:
+    extended: true
+
+- name: Paths | remove absent targets
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
-  with_items: "{{ crontabs_removed | default([], true) }}"
+  loop: "{{ paths_absent_merged | default([], true) }}"
 
 - name: Cron | install entries
   ansible.builtin.copy:
@@ -65,36 +87,3 @@
       {{ item.dest | default('~' ~ (item.user | default('root')) ~ '/' ~ (item.name | default(''))) }}
   when: item is mapping and (item.dest is defined or item.name is defined)
 #
-# - name: Profile | edit mode
-#   ansible.builtin.copy:
-#     content: "set editing-mode vi"
-#     dest: /root/.inputrc
-#     mode: "0644"
-#     owner: root
-#     group: root
-#
-# - name: Profile | root dig
-#   ansible.builtin.copy:
-#     content: "+search +short"
-#     dest: /root/.digrc
-#     mode: "0644"
-#     owner: root
-#     group: root
-#
-# - name: Profile | root profile
-#   ansible.builtin.copy:
-#     src: root_bashprofile
-#     dest: /root/.bash_profile
-#     mode: "0644"
-#     owner: root
-#     group: root
-#     backup: true
-#
-# - name: Global Env Profile
-#   ansible.builtin.copy:
-#     src: "{{ item }}"
-#     dest: "/etc/profile.d/{{ item }}"
-#     owner: "root"
-#     group: "root"
-#     mode: "0644"
-#   with_items: "{{ global_profiles | default([], true) }}"

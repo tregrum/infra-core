@@ -1,0 +1,12 @@
+# tasks/artifacts_pre.yml
+# Bootstrap artifact phase for prereq files that must exist before later tasks.
+#
+
+- name: Artifacts | pre phase
+  ansible.builtin.import_tasks: artifacts_apply.yml
+  vars:
+    artifacts_active: "{{ artifacts_pre_merged | default([], true) }}"
+
+- name: Artifacts | flush bootstrap handlers
+  ansible.builtin.meta: flush_handlers
+  when: artifacts_pre_merged | default([], true) | length > 0

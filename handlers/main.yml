@@ -1,20 +1,50 @@
 ---
-- name: Restart service - NetworkManager
+- name: Restart NetworkManager
   ansible.builtin.systemd:
     name: NetworkManager
     state: restarted
 
-- name: Restart service - rsyslog
+- name: Restart rsyslog
   ansible.builtin.systemd:
     name: rsyslog
     state: restarted
 
-- name: Restart service - postfix
+- name: Restart Postfix
   ansible.builtin.systemd:
     name: postfix
     state: restarted
 
-- name: Update Trusty CA Certs
+- name: Restart sssd
+  ansible.builtin.systemd:
+    name: sssd
+    state: restarted
+
+- name: Restart httpd
+  ansible.builtin.systemd:
+    name: httpd
+    state: restarted
+
+- name: Restart nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: restarted
+
+- name: Restart autofs
+  ansible.builtin.systemd:
+    name: autofs
+    state: restarted
+
+- name: Restart crond
+  ansible.builtin.systemd:
+    name: crond
+    state: restarted
+
+- name: Restart sshd
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted
+
+- name: Update CA Trust
   ansible.builtin.command:
     cmd: update-ca-trust
   check_mode: false
@@ -25,18 +55,10 @@
     daemon_reload: true
   listen: "systemd daemon-reload"
 
-# - name: restart unit
-#   ansible.builtin.systemd:
-#     name: "{{ artifact_unit_name | default('') }}"
-#     state: restarted
-#   listen: "restart unit"
-
-- name: Firewalld reload
+- name: Reload firewalld
   ansible.builtin.command: firewall-cmd --reload
   changed_when: true
-  listen: "firewalld reload"
 
 - name: Reload NFS exports
   ansible.builtin.command: exportfs -ra
   changed_when: true
-  listen: "Reload NFS exports"

@@ -49,7 +49,7 @@
     regexp: "^relayhost = "
     line: "relayhost = {{ mail_relay }}"
     backup: true
-  notify: Restart service - postfix
+  notify: Restart Postfix
   when:
     - mail_relay is defined
     - "'postfix' in ansible_facts.packages"

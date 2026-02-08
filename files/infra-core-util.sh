@@ -174,8 +174,6 @@ EOF_INV
 # timezone: "America/Detroit"
 
 # Drop a trusted CA bundle in /etc/pki/ca-trust/source/anchors
-# ca_file: "orgca.pem"
-# force_orgca: false
 
 # Packages to install/absent via dnf
 # packages_installed:
@@ -195,8 +193,20 @@ EOF_INV
 #   - name: "prestage-driver"
 #     path: "/opt/rpms/driver.rpm"
 #     disable_gpg_check: false
-# packages_rpm_staging_dir: "/var/tmp/ansible-rpms"
+# packages_rpm_remote_cache: "/var/cache/infra-core/rpms"
 
+# Bootstrap artifacts that must land before package/network tasks continue
+# artifacts_pre:
+#   - type: copy
+#     name: "corp root ca"
+#     src: "ca/org-root.pem"
+#     dest: "/etc/pki/ca-trust/source/anchors/org-root.pem"
+#     owner: "root"
+#     group: "root"
+#     mode: "0644"
+#     force: false
+#     notify: "update_ca_trust"
+#
 # Artifact deployment examples
 # artifacts_common:
 #   - type: copy_set
@@ -218,6 +228,10 @@ EOF_INV
 #     group: "appgrp"
 #     mode: "0640"
 #     dir_mode: "0750"
+#
+# Extend artifact notify aliases in inventory if your play defines matching handlers
+# artifact_notify_map:
+#   restart_myapp: "Restart myapp"
 
 # Services to toggle via systemd
 # services_enabled:
@@ -229,11 +243,14 @@ EOF_INV
 # firewall_allow_ports:
 #   - "443/tcp"
 
-# Global bash snippets to install into /etc/profile.d
-# global_profiles:
-#   - "corp_env.sh"
-
-# Manage selinux disabled/enabled toggles per service above
+# Additional shell/dotfile management beyond the built-in baseline
+# profile_managed_files_bespoke:
+#   - path: "/root/.inputrc"
+#     type: "content"
+#     content: "set editing-mode vi"
+#     owner: "root"
+#     group: "root"
+#     mode: "0644"
 
 # OS update automation
 # updates:
@@ -322,13 +339,18 @@ EOF_INV
 #     owner: "root"
 #     group: "root"
 #     mode: "0750"
-
+#
+# File targets to remove
+# paths_absent:
+#   - "/etc/cron.d/oldjob"
+#   - "/etc/motd.d/custom-banner"
+#
 # Cron entries to drop in /etc/cron.d
 # crontab_entries:
 #   nmon:
 #     root 0 * * * /usr/bin/nmon -ft > /dev/null 2>&1
-
-# Extra cron files to remove
+#
+# Backward-compatible cron removal list still works, but `paths_absent` is preferred.
 # crontabs_removed:
 #   - "/etc/cron.d/unwanted"
 EOF_GV

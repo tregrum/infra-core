@@ -86,6 +86,6 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Restart service - NetworkManager
+  notify: Restart NetworkManager
   when: networkmanager_wait_device_timeout is defined
 #

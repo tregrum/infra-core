@@ -47,7 +47,6 @@
     name: "{{ item.value.name | default(item.key) }}"
     baseurl: "{{ item.value.baseurl }}"
     description: "{{ item.value.description | default(item.value.name | default(item.key)) }}"
-    # gpgcheck: false
   with_dict: "{{ repos_enabled | default({}, true) }}"
   when: item.value.baseurl is defined
 
