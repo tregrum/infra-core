@@ -1,5 +1,3 @@
----
-
 # Infra-Core Ansible Repo
 
 This repository contains an opinionated “common baseline” role for RHEL-compatible hosts. It manages OS packages, repositories, storage, local accounts, cron jobs, and other day-two settings through a single inventory-driven interface.
@@ -10,23 +8,24 @@ This repository contains an opinionated “common baseline” role for RHEL-comp
 - `tasks/` – modular task sets (services, storage, accounts, etc.)
 - `files/` & `templates/` – assets copied to managed hosts
 
-## Usage
-
 ## Key Capabilities
 
-- Package lifecycle management (`packages_installed`, `packages_installed_extra`, `packages_uninstalled`) plus ad-hoc RPM staging via `packages_rpm`
-- Service enable/disable and SELinux state toggling
+- System baseline controls for MOTD, SELinux, timezone, networking, and update posture
+- Package lifecycle management (`packages_installed_common`, `packages_installed_bespoke`, `packages_uninstalled_common`, `packages_uninstalled_bespoke`) plus ad-hoc RPM staging via `packages_rpm`
 - Yum/DNF repository enablement supporting release RPMs, `.repo` downloads, or inline definitions
 - Automated updates via `dnf-automatic` with optional reboot scheduling
-- `dnf.conf` tuning including optional `excludepkgs`
-- LVM provisioning: volume groups, logical volumes, filesystem creation, and mounts
-- Remote filesystem mounts via `network_mounts` (for example NFS)
-- NFS server exports via `nfs_exports`
-- Local groups/accounts, sudoers entries, and filesystem path management
-- Cron job enforcement via `/etc/cron.d`
-- System profile customization (MOTD, root dotfiles, profile snippets)
+- Local groups/accounts, sudoers entries, and service/firewall controls
+- LVM provisioning, remote mounts, NFS exports, filesystem paths, and ACLs
+- Artifact-driven deployment for files, templates, trees, links, sync, and archives
+- User profile customization and cron job enforcement through inventory-driven vars
 
-## Customizing Repositories
+## Usage
+
+### System Baseline
+
+Use the baseline variables for shared host identity and behavior such as `timezone`, `selinux_config`, `dns_domain_search`, `sudoers_group`, `mail_relay`, and MOTD/profile defaults.
+
+### Packages, Repositories, and Updates
 
 Define entries under `repos_enabled` using whichever combination fits:
 
@@ -37,7 +36,9 @@ Define entries under `repos_enabled` using whichever combination fits:
 
 The role normalizes these options so you can mix approaches per repository.
 
-### Installing Standalone RPMs
+Use `packages_installed_common` for the baseline package set and `packages_installed_bespoke` for env-, role-, or host-specific additions. The merged `packages_installed` list is what the role actually installs. The same layering pattern applies to `packages_uninstalled_common` and `packages_uninstalled_bespoke`.
+
+#### Installing Standalone RPMs
 
 Define `packages_rpm` entries when software is not available via enabled repositories. Every item supports the usual `state`, `disable_gpg_check`, and `validate_certs` toggles, plus these source types:
 
@@ -48,9 +49,152 @@ Define `packages_rpm` entries when software is not available via enabled reposit
 
 Drop files into whichever layer fits (inventory artifacts, per-role files, or an existing path) and mix URL installs alongside them in the same list.
 
-### Deploying Artifacts
+#### Automated Updates
+
+When enabling `dnf-automatic`, set `dnf_automatic.reboot` to the native config value you want written into `automatic.conf`:
+
+```yaml
+dnf_automatic:
+  install: true
+  schedule: "*-*-16 04:30"
+  # or every 3rd Sunday: schedule: "Sun-*-15..21 04:30"
+  reboot: "when-needed" # never, when-changed, when-needed
+  # excludepkgs:
+  #   - "legacy-runtime*"
+  #   - "compat-library*"
+```
+`dnf_conf_excludepkgs` is the global always-on exclude rule defined in `/etc/dnf/dnf.conf`. `dnf_automatic.excludepkgs` is found in the `[base]` section of `/etc/dnf/automatic.conf`. Its effectively additive to `dnf_conf_excludepkgs`, but only applies to os updates executed by dnf-automatic timer.  Use them when you need a core DNF policy that blocks a small set of packages everywhere, and optionally a narrower automatic-update policy that skips a few more packages during the unattended run.
+
+### Accounts and Access
+
+Local users and groups are driven through `local_groups`, `group_members`, and `local_accounts`. `sudoers_group` can be used for a simple shared administrative sudo rule.
+
+### Storage, Filesystems, Paths, and ACLs
+
+Use `local_mounts` for LVM-backed filesystems managed by this role. Use `network_mounts` for remote filesystems that should be present in `fstab` and mounted, such as NFS exports from another host. Use `nfs_exports` when this host should serve one or more exports itself.
+
+Example:
+
+```yaml
+network_mounts:
+  shared_apps:
+    src: "nfs-server.example.com:/exports/apps"
+    path: "/srv/apps"
+    fs: "nfs"
+    fsopts: "defaults,_netdev,nofail"
+    owner: "root"
+    group: "root"
+    mode: "0755"
+```
+
+Use `local_paths` for one-off filesystem paths with bespoke settings. When you need to create several directories with the same owner, group, and mode, use `local_path_sets` to keep the variable file compact.
+
+Example:
+
+```yaml
+local_path_sets:
+  app_logs:
+    owner: "root"
+    group: "root"
+    mode: "0750"
+    paths:
+      - "/var/log/app"
+      - "/var/log/app/archive"
+      - "/var/log/app/import"
+```
+
+`local_path_sets` normalizes into ordinary `local_paths` entries during the role run.
+
+For controlled file removals, use `paths_absent_bespoke`. It merges with a small built-in `paths_absent_common` baseline. Entries must be absolute paths, and the role rejects a small set of high-risk root directories. Existing directories are also rejected so this list stays file-oriented.
+
+Example:
+
+```yaml
+paths_absent_bespoke:
+  - "/etc/cron.d/oldjob"
+  - "/etc/motd.d/custom-banner"
+```
+
+When you need ACLs beyond basic owner/group/mode, define them under `local_acls`. ACLs run after artifacts and path creation so they act as the final permission layer.
+
+Example:
+
+```yaml
+local_acls:
+  - path: "/srv/app"
+    etype: "group"
+    entity: "appops"
+    permissions: "rwx"
+    default: true
+```
+
+Example NFS server export:
+
+```yaml
+nfs_exports:
+  apps_export:
+    path: "/srv/apps"
+    clients:
+      - "10.10.0.0/16(rw,sync,no_root_squash)"
+      - "192.168.50.10(ro,sync)"
+    owner: "root"
+    group: "root"
+    mode: "0755"
+```
+
+### Profiles and MOTD
+
+`profile_managed_files` now merges `profile_managed_files_common` (baseline entries) with `profile_managed_files_bespoke`. Override either list, or replace the merged variable entirely, when you need host-, role-, or environment-specific shells and dotfiles. Templates continue to support both inline `content` and `src` pointers.
+
+### Artifacts and Deployed Files
 
 Use the existing flat `copy`, `template`, `directory`, `link`, `sync`, and `archive` artifact entries for one-off items. When you have a small cluster of files that all share the same source directory, target directory, and ownership/mode, use `copy_set` to keep `group_vars` compact. When you need to copy a whole directory tree, use `copy_tree`.
+
+Starter examples:
+
+```yaml
+artifacts_common:
+  - type: copy
+    name: "app config"
+    src: "app/app.conf"
+    dest: "/etc/app/app.conf"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+
+  - type: template
+    name: "app config template"
+    src: "app/app.conf.j2"
+    dest: "/etc/app/app.conf"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+
+  - type: directory
+    name: "app state dir"
+    dest: "/var/lib/app"
+    owner: "appuser"
+    group: "appgrp"
+    mode: "0750"
+
+  - type: link
+    name: "app shortcut"
+    src: "/opt/app/current"
+    dest: "/usr/local/bin/app"
+
+  - type: sync
+    name: "deploy app tree"
+    src_dir: "app/tree"
+    dest: "/srv/app"
+    rsync_opts:
+      - "--exclude=.git"
+
+  - type: archive
+    name: "seed archive"
+    src: "app/seed.tar.gz"
+    dest: "/srv/app"
+    strip: 1
+```
 
 If a file is a prerequisite for later package or network operations, place it in `artifacts_pre` instead of the normal artifact layers. `artifacts_pre` runs earlier in the role and flushes handlers before package tasks continue.
 
@@ -69,7 +213,7 @@ artifacts_pre:
       - update_ca_trust
 ```
 
-For `copy` artifacts, `force: false` gives you seed-only behavior: the role creates the file if it is missing, but does not overwrite an existing destination.
+For `copy` artifacts, `force: false` gives you seed-only behavior: the role creates the file if it is missing, but does not overwrite an existing destination. The same option is also available for `template` artifacts when you want to seed a rendered file without later overwriting local changes.
 
 Example:
 
@@ -106,6 +250,8 @@ artifacts_common:
 
 `copy_tree` copies the named source directory and its contents into `dest_dir`, so the example above results in `/var/app/abc/...`. Sources are resolved using the same `{{ artifacts_root }}` then `{{ artifacts_root }}/files` fallback pattern as `copy_set`. The copy is additive; it does not prune remote files.
 
+For `template` artifacts, sources now follow the same flat layout convention: the role looks in `{{ artifacts_root }}/...` first and falls back to `{{ artifacts_root }}/templates/...` for backward compatibility. A `.j2` suffix is just a naming convention; `type: template` is what enables Jinja rendering.
+
 Artifact items may also declare `notify` aliases to trigger supported handlers when a file changes:
 
 ```yaml
@@ -129,82 +275,13 @@ artifact_notify_map:
   restart_myapp: "Restart myapp"
 ```
 
-### Storage Mounts
+### Services and Firewall
 
-Use `local_mounts` for LVM-backed filesystems managed by this role. Use `network_mounts` for remote filesystems that should be present in `fstab` and mounted, such as NFS exports from another host. Use `nfs_exports` when this host should serve one or more exports itself.
+Use `services_enabled` and `services_disabled` for basic systemd state management.
 
-Example:
+For firewalld, `firewall_allow_ports` enables port rules such as `443/tcp`, while `firewall_enable_services` enables service profiles by name, including any custom service XML deployed through artifacts.
 
-```yaml
-network_mounts:
-  shared_apps:
-    src: "nfs-server.example.com:/exports/apps"
-    path: "/srv/apps"
-    fs: "nfs"
-    fsopts: "defaults,_netdev,nofail"
-    owner: "root"
-    group: "root"
-    mode: "0755"
-```
-
-### Managing Local Paths
-
-Use `local_paths` for one-off filesystem paths with bespoke settings. When you need to create several directories with the same owner, group, and mode, use `local_path_sets` to keep the variable file compact.
-
-Example:
-
-```yaml
-local_path_sets:
-  app_logs:
-    owner: "root"
-    group: "root"
-    mode: "0750"
-    paths:
-      - "/var/log/app"
-      - "/var/log/app/archive"
-      - "/var/log/app/import"
-```
-
-`local_path_sets` normalizes into ordinary `local_paths` entries during the role run.
-
-For controlled file removals, use `paths_absent`. Entries must be absolute paths, and the role rejects a small set of high-risk root directories. Existing directories are also rejected so this list stays file-oriented.
-
-Example:
-
-```yaml
-paths_absent:
-  - "/etc/cron.d/oldjob"
-  - "/etc/motd.d/custom-banner"
-```
-
-Example NFS server export:
-
-```yaml
-nfs_exports:
-  apps_export:
-    path: "/srv/apps"
-    clients:
-      - "10.10.0.0/16(rw,sync,no_root_squash)"
-      - "192.168.50.10(ro,sync)"
-    owner: "root"
-    group: "root"
-    mode: "0755"
-```
-
-### Automated Updates
-
-When enabling `dnf-automatic`, set `updates.reboot` to the native config value you want written into `automatic.conf`:
-
-```yaml
-updates:
-  install: true
-  schedule: "*-*-16 04:30"
-  reboot: "when-needed" # never, when-changed, when-needed
-```
-
-### Customizing Profiles
-
-`profile_managed_files` now merges `profile_managed_files_common` (baseline entries) with `profile_managed_files_bespoke`. Override either list—or replace the merged variable entirely—when you need host-, role-, or environment-specific shells and dotfiles. Templates continue to support both inline `content` and `src` pointers.
+When a run deploys a custom firewalld service XML under `/etc/firewalld/services` or `/usr/lib/firewalld/services`, the role reloads firewalld before `firewall_enable_services` is evaluated so the new service can be enabled in the same run.
 
 ### Using Ansible Vault
 
@@ -245,7 +322,7 @@ cd /path/to/infra-core
 git add .
 git commit -m "a new commit"
 git push origin main
-git tag v1.6.0
+git tag v1.1.1
 git push origin main --tags
 ```
 
@@ -253,17 +330,17 @@ git push origin main --tags
 
 ```bash
 cd /path/to/infra-<my_env>
-./core/files/infra-core-util.sh update v1.6.0 .
+./core/files/infra-core-util.sh update v1.1.1 .
 git status
 git diff --submodule
 git add core
-git commit -m "Update infra-core to v1.6.0"
+git commit -m "Update infra-core to v1.1.1"
 ```
 
 ### Creating infra-<my_env>
 
 ```bash
-/path/to/infra-core/files/infra-core-util.sh create infra-my-env [/path/to/infra-core or url] [/path/to/workdir] [v1.6.0]
+/path/to/infra-core/files/infra-core-util.sh create infra-my-env [/path/to/infra-core or url] [/path/to/workdir] [v1.1.1]
 cd /path/to/workdir/infra-my-env
 git status
 git add .

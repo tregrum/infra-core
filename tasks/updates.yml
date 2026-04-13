@@ -1,13 +1,4 @@
 ---
-- name: Network tunables - firewall helper
-  ansible.posix.sysctl:
-    name: "{{ item.param }}"
-    value: "{{ item.value }}"
-    sysctl_set: true
-    state: present
-    reload: true
-  loop: "{{ kernel_sysctl_settings | default([], true) }}"
-  when: kernel_sysctl_settings | default([], true) | length > 0
 
 - name: Set the max kernel count
   ansible.builtin.lineinfile:
@@ -31,13 +22,24 @@
 
 - name: Enable Automated DNF Updates
   when:
-    - updates.install | default(false) | bool
+    - dnf_automatic.install | default(false) | bool
   block:
     - name: Validate dnfauto reboot mode
       ansible.builtin.assert:
         that:
-          - updates.reboot is not defined or updates.reboot in ['never', 'when-changed', 'when-needed']
-        fail_msg: "updates.reboot must be one of: never, when-changed, when-needed"
+          - dnf_automatic.reboot is not defined or dnf_automatic.reboot in ['never', 'when-changed', 'when-needed']
+        fail_msg: "dnf_automatic.reboot must be one of: never, when-changed, when-needed"
+
+    - name: Validate dnfauto base excludes
+      ansible.builtin.assert:
+        that:
+          - >-
+            dnf_automatic.excludepkgs is not defined
+            or dnf_automatic.excludepkgs is string
+            or (dnf_automatic.excludepkgs is sequence and dnf_automatic.excludepkgs is not string)
+        fail_msg: >-
+          dnf_automatic.excludepkgs must be a string or a list of package name
+          patterns when set.
 
     - name: DNF | install packages
       ansible.builtin.dnf:
@@ -60,7 +62,23 @@
       ansible.builtin.lineinfile:
         path: "/etc/dnf/automatic.conf"
         regexp: "^(#\\s*)?reboot\\s*="
-        line: "reboot = {{ updates.reboot | default('never') }}"
+        line: "reboot = {{ dnf_automatic.reboot | default('never') }}"
+
+    - name: Configure dnfauto excludes
+      ansible.builtin.lineinfile:
+        path: "/etc/dnf/automatic.conf"
+        regexp: "^excludepkgs="
+        line: "excludepkgs={{ dnf_automatic.excludepkgs | join(',') }}"
+      when:
+        - dnf_automatic.excludepkgs | default([], true) | length > 0
+
+    - name: Remove dnfauto excludes
+      ansible.builtin.lineinfile:
+        path: "/etc/dnf/automatic.conf"
+        regexp: "^excludepkgs="
+        state: absent
+      when:
+        - dnf_automatic.excludepkgs | default([], true) | length == 0
 
     - name: Configure DNF Timer Scheduler
       ansible.builtin.template:
@@ -75,17 +93,4 @@
         name: dnf-automatic.timer
         state: started
         enabled: true
-
-- name: Ensure NetworkManager wait timeout is configured
-  become: true
-  ansible.builtin.copy:
-    dest: /etc/NetworkManager/conf.d/10-wait-timeout.conf
-    content: |
-      [connection]
-      wait-device-timeout={{ networkmanager_wait_device_timeout }}
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Restart NetworkManager
-  when: networkmanager_wait_device_timeout is defined
 #

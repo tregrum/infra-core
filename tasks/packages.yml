@@ -53,16 +53,10 @@
 - name: DNF | install packages
   ansible.builtin.dnf:
     name: "{{ packages_install_list }}"
+    disable_excludes: main
     state: present
   vars:
-    packages_install_list: >-
-      {{
-        (
-          (packages_installed | default([], true))
-          +
-          (packages_installed_extra | default([], true))
-        ) | unique
-      }}
+    packages_install_list: "{{ packages_installed | default([], true) | unique }}"
   when: packages_install_list | length > 0
 
 - name: DNF | uninstall packages

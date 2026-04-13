@@ -28,10 +28,25 @@
     port: "{{ item }}"
     permanent: true
     state: enabled
-  with_items: "{{ firewalld_allow_ports | default([], true) }}"
+  with_items: "{{ firewall_allow_ports | default([], true) }}"
   when:
     - "'firewalld' in ansible_facts.packages"
-    - firewalld_allow_ports is defined
+    - firewall_allow_ports is defined
+
+- name: Firewalld | reload changed custom service definitions
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: true
+  when:
+    - "'firewalld' in ansible_facts.packages"
+    - firewall_enable_services | default([], true) | length > 0
+    - >-
+      (
+        _artifacts_changed | default([], true)
+        | selectattr('dest', 'defined')
+        | selectattr('dest', 'match', '^/(etc|usr/lib)/firewalld/services/.+\\.xml$')
+        | list
+        | length
+      ) > 0
 
 - name: Firewalld | Enable Service Profile
   ansible.posix.firewalld:
@@ -52,4 +67,5 @@
   notify: Restart Postfix
   when:
     - mail_relay is defined
+    - mail_relay | string | trim | length > 0
     - "'postfix' in ansible_facts.packages"

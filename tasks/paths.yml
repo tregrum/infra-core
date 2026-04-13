@@ -1,0 +1,106 @@
+---
+- name: Paths | validate absent targets
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | trim | length > 0
+      - item is match('^/')
+      - item not in ['/', '/etc', '/var', '/usr', '/home', '/root', '/opt', '/srv']
+    fail_msg: >-
+      paths_absent entries must be non-empty absolute file paths and may not
+      target high-risk root directories.
+  loop: "{{ paths_absent | default([], true) }}"
+
+- name: Paths | stat absent targets
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ paths_absent | default([], true) }}"
+  register: paths_absent_stat
+
+- name: Paths | reject existing directories from absent list
+  ansible.builtin.assert:
+    that:
+      - not (paths_absent_stat.results[ansible_loop.index0].stat.exists | default(false))
+        or not (paths_absent_stat.results[ansible_loop.index0].stat.isdir | default(false))
+    fail_msg: >-
+      paths_absent target '{{ item }}' currently exists as a directory. This
+      list is intended for file targets only.
+  loop: "{{ paths_absent | default([], true) }}"
+  loop_control:
+    extended: true
+
+- name: Paths | remove absent targets
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ paths_absent | default([], true) }}"
+
+- name: Cron | install entries
+  ansible.builtin.copy:
+    content: "{{ (item.value | string | trim) + '\n' }}"
+    dest: "/etc/cron.d/{{ item.key }}"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+  loop: "{{ crontab_entries | default({}, true) | dict2items }}"
+  when: item.value is defined and (item.value | string | trim | length > 0)
+
+- name: Path | validate path sets
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.paths is defined
+      - item.value.paths is sequence
+      - item.value.paths is not string
+      - item.value.paths | length > 0
+      - >-
+        (
+          item.value.paths
+          | select('string')
+          | map('trim')
+          | reject('equalto', '')
+          | reject('match', '^/')
+          | list
+          | length
+        ) == 0
+      - item.value.owner is not defined or (item.value.owner | string | trim | length > 0)
+      - item.value.group is not defined or (item.value.group | string | trim | length > 0)
+      - item.value.mode is not defined or (item.value.mode | string | trim | length > 0)
+    fail_msg: >-
+      local_path_sets['{{ item.key }}'] must define a non-empty list of
+      absolute paths plus optional non-empty owner, group, and mode.
+  loop: "{{ local_path_sets | default({}, true) | dict2items }}"
+
+- name: Path | initialize normalized paths
+  ansible.builtin.set_fact:
+    local_paths_normalized: "{{ local_paths | default({}, true) }}"
+
+- name: Path | expand path sets
+  ansible.builtin.set_fact:
+    local_paths_normalized: "{{ local_paths_normalized | combine(expanded_paths, recursive=true) }}"
+  loop: "{{ local_path_sets | default({}, true) | dict2items }}"
+  vars:
+    expanded_paths: >-
+      {%- set out = {} -%}
+      {%- for path_value in item.value.paths | map('trim') -%}
+      {%- set key_name = item.key ~ '__' ~ loop.index0 -%}
+      {%- set _ = out.update({
+          key_name: {
+            'path': path_value,
+            'state': 'directory',
+            'owner': item.value.owner | default('root'),
+            'group': item.value.group | default('root'),
+            'mode': item.value.mode | default('0755')
+          }
+        }) -%}
+      {%- endfor -%}
+      {{ out | to_json | from_json }}
+
+- name: Path | create
+  ansible.builtin.file:
+    path: "{{ item.value.path }}"
+    state: "{{ item.value.state | default('directory') }}"
+    mode: "{{ item.value.mode | default('0755') }}"
+    owner: "{{ item.value.owner | default('root') }}"
+    group: "{{ item.value.group | default('root') }}"
+  with_dict: "{{ local_paths_normalized | default({}, true) }}"

@@ -107,5 +107,7 @@
     commands: ALL
     group: '{{ sudoers_group }}'
     state: present
-  when: sudoers_group is defined
+  when:
+    - sudoers_group is defined
+    - sudoers_group | string | trim | length > 0
 #

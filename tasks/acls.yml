@@ -1,0 +1,56 @@
+---
+- name: ACL | validate definitions
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.path is defined
+      - item.path | string | trim | length > 0
+      - item.path is match('^/')
+      - item.etype is defined
+      - item.etype in ['user', 'group', 'mask', 'other']
+      - item.state is not defined or item.state in ['present', 'absent']
+      - item.default is not defined or item.default is boolean
+      - item.recursive is not defined or item.recursive is boolean
+      - >-
+        (
+          item.state | default('present') == 'absent'
+        )
+        or
+        (
+          item.permissions is defined
+          and item.permissions | string | trim | length > 0
+        )
+      - >-
+        (
+          item.etype in ['mask', 'other']
+        )
+        or
+        (
+          item.entity is defined
+          and item.entity | string | trim | length > 0
+        )
+    fail_msg: >-
+      local_acls entries must define an absolute path, etype (user, group, mask,
+      or other), optional present/absent state, and permissions/entity when
+      required.
+  loop: "{{ local_acls | default([], true) }}"
+
+- name: ACL | apply entries
+  become: true
+  ansible.posix.acl:
+    path: "{{ item.path }}"
+    etype: "{{ item.etype }}"
+    entity: >-
+      {{
+        item.entity
+        if item.etype in ['user', 'group']
+        else omit
+      }}
+    permissions: "{{ item.permissions | default(omit) }}"
+    default: "{{ item.default | default(omit) }}"
+    recursive: "{{ item.recursive | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ local_acls | default([], true) }}"
+  loop_control:
+    label: >-
+      {{ item.path }} :: {{ item.etype }}{{ (':' ~ item.entity) if item.entity is defined else '' }}

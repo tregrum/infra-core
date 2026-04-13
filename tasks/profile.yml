@@ -18,51 +18,46 @@
     mode: "0744"
   when: etc_motd_src is defined
 
-- name: Paths | validate absent targets
-  ansible.builtin.assert:
-    that:
-      - item is string
-      - item | trim | length > 0
-      - item is match('^/')
-      - item not in ['/', '/etc', '/var', '/usr', '/home', '/root', '/opt', '/srv']
-    fail_msg: >-
-      paths_absent entries must be non-empty absolute file paths and may not
-      target high-risk root directories.
-  loop: "{{ paths_absent_merged | default([], true) }}"
+- name: Profile | collect target users
+  ansible.builtin.set_fact:
+    profile_target_users: >-
+      {{
+        (
+          profile_managed_files
+          | default([], true)
+          | select('mapping')
+          | map(attribute='user', default='root')
+          | list
+          | unique
+        )
+      }}
 
-- name: Paths | stat absent targets
-  ansible.builtin.stat:
-    path: "{{ item }}"
-  loop: "{{ paths_absent_merged | default([], true) }}"
-  register: paths_absent_stat
+- name: Profile | lookup target user primary groups
+  ansible.builtin.command:
+    argv:
+      - id
+      - -gn
+      - "{{ item }}"
+  loop: "{{ profile_target_users | default([], true) }}"
+  register: profile_target_user_groups_lookup
+  changed_when: false
+  failed_when: false
 
-- name: Paths | reject existing directories from absent list
-  ansible.builtin.assert:
-    that:
-      - not (paths_absent_stat.results[ansible_loop.index0].stat.exists | default(false))
-        or not (paths_absent_stat.results[ansible_loop.index0].stat.isdir | default(false))
-    fail_msg: >-
-      paths_absent target '{{ item }}' currently exists as a directory. This
-      list is intended for file targets only.
-  loop: "{{ paths_absent_merged | default([], true) }}"
-  loop_control:
-    extended: true
-
-- name: Paths | remove absent targets
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop: "{{ paths_absent_merged | default([], true) }}"
-
-- name: Cron | install entries
-  ansible.builtin.copy:
-    content: "{{ (item.value | string | trim) + '\n' }}"
-    dest: "/etc/cron.d/{{ item.key }}"
-    owner: "root"
-    group: "root"
-    mode: "0644"
-  loop: "{{ crontab_entries | default({}, true) | dict2items }}"
-  when: item.value is defined and (item.value | string | trim | length > 0)
+- name: Profile | derive target user primary groups
+  ansible.builtin.set_fact:
+    profile_target_user_groups: >-
+      {{
+        (profile_target_user_groups | default({}))
+        | combine({
+            item.item: (item.stdout | trim)
+          })
+      }}
+  loop: "{{ profile_target_user_groups_lookup.results | default([], true) }}"
+  when:
+    - item.rc is defined
+    - item.rc == 0
+    - item.stdout is defined
+    - item.stdout | trim | length > 0
 
 - name: Profile | managed files
   ansible.builtin.copy:
@@ -78,7 +73,17 @@
         | default('~' ~ (item.user | default('root')) ~ '/' ~ ((item.name | default('') | regex_replace('^/+',''))))
       }}
     owner: "{{ item.owner | default(item.user | default('root')) }}"
-    group: "{{ item.group | default(item.owner | default(item.user | default('root'))) }}"
+    group: >-
+      {{
+        item.group
+        | default(
+            item.owner
+            | default(
+                (profile_target_user_groups | default({}))[item.user | default('root')]
+                | default(item.user | default('root'))
+              )
+          )
+      }}
     mode: "{{ item.mode | default('0644') }}"
     backup: "{{ item.backup | default(false) }}"
   loop: "{{ profile_managed_files | default([]) }}"

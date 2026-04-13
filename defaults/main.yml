@@ -2,22 +2,19 @@
 #
 # Defaults
 #
+
+# System baseline
 fix_root_pv: false
-#
 kernel_sysctl_settings:
   - { param: "net.ipv4.tcp_keepalive_time", value: "300" }
   - { param: "net.ipv4.tcp_keepalive_intvl", value: "30" }
 dnf_installonly_limit: 2
 networkmanager_wait_device_timeout: 10
-packages_installed: []
-packages_installed_extra: []
-packages_uninstalled: []
-services_enabled: []
-services_disabled: []
-firewall_allow_ports: []
-packages_rpm: []
-packages_rpm_artifact_src: "{{ artifacts_root }}/rpms"
-packages_rpm_remote_cache: "/var/cache/infra-core/rpms"
+timezone: ""
+dns_domain_search: ""
+selinux_config: ""
+sudoers_group: ""
+mail_relay: ""
 etc_motd_content: |+
   #############################################################################
       Welcome to {{ ansible_nodename }} ({{ ansible_default_ipv4.address }})
@@ -26,6 +23,54 @@ profile_inputrc_content: |+
   set editing-mode vi
 profile_digrc_content: |+
   +search +short
+#
+# Packages, repositories, and updates
+packages_installed_common: []
+packages_installed_bespoke: []
+packages_installed: >-
+  {{
+    (packages_installed_common | default([], true))
+    + (packages_installed_bespoke | default([], true))
+  }}
+packages_uninstalled_common: []
+packages_uninstalled_bespoke: []
+packages_uninstalled: >-
+  {{
+    (packages_uninstalled_common | default([], true))
+    + (packages_uninstalled_bespoke | default([], true))
+  }}
+packages_rpm: []
+packages_rpm_artifact_src: "{{ artifacts_root }}/rpms"
+packages_rpm_remote_cache: "/var/cache/infra-core/rpms"
+dnf_automatic: {}
+repos_enabled: {}
+dnf_conf_excludepkgs: []
+
+# Accounts and access
+local_groups_enforce_gid: false
+local_groups: {}
+group_members: {}
+local_accounts: {}
+
+# Storage, filesystems, paths, and ACLs
+volume_groups: {}
+local_mounts: {}
+network_mounts: {}
+nfs_exports: {}
+local_path_sets: {}
+local_paths: {}
+paths_absent_common:
+  - "/etc/motd.d/cockpit"
+  - "/etc/motd.d/insights-client"
+paths_absent_bespoke: []
+paths_absent: >-
+  {{
+    (paths_absent_common | default([], true))
+    + (paths_absent_bespoke | default([], true))
+  }}
+local_acls: []
+
+# Profiles and MOTD
 profile_managed_files_common:
   [
     { user: root, name: ".bashrc", src: files/default_bashrc },
@@ -33,42 +78,15 @@ profile_managed_files_common:
     { user: root, name: ".inputrc", content: "{{ profile_inputrc_content }}" },
     { user: root, name: ".digrc", content: "{{ profile_digrc_content }}" },
   ]
-
 profile_managed_files_bespoke: []
-
 profile_managed_files: >-
   {{
     (profile_managed_files_common | default([], true))
     + (profile_managed_files_bespoke | default([], true))
   }}
-
-paths_absent_default:
-  - "/etc/motd.d/cockpit"
-  - "/etc/motd.d/insights-client"
-paths_absent: []
-crontabs_removed: []
-paths_absent_merged: >-
-  {{
-    (paths_absent_default | default([], true))
-    + (crontabs_removed | default([], true))
-    + (paths_absent | default([], true))
-  }}
-updates: {}
-repos_enabled: {}
-dnf_conf_excludepkgs: []
-volume_groups: {}
-local_mounts: {}
-network_mounts: {}
-nfs_exports: {}
-local_groups_enforce_gid: false
-local_groups: {}
-group_members: {}
-local_accounts: {}
-local_path_sets: {}
-local_paths: {}
 crontab_entries: {}
-local_acls: {}
-#
+
+# Artifacts and deployed files
 artifact_notify_map_default:
   update_ca_trust: "Update CA Trust"
   systemd_daemon_reload: "Systemd daemon-reload"
@@ -89,7 +107,6 @@ artifact_notify_map_merged: >-
     (artifact_notify_map_default | default({}, true))
     | combine(artifact_notify_map | default({}, true), recursive=true)
   }}
-
 artifacts_root: "{{ inventory_dir }}/artifacts"
 artifacts_pre: [] # bootstrap/prereq artifacts that must run before packages
 artifacts_pre_merged: "{{ artifacts_pre | default([], true) }}"
@@ -97,8 +114,6 @@ artifacts_common: [] # shared everywhere
 artifacts_env: [] # from group_vars/<env>.yml
 artifacts_role: [] # from group_vars/<role>.yml
 artifacts_host: [] # from host_vars/<host>.yml
-
-# final merged list (can override in play )
 artifacts_merged: >-
   {{
     (artifacts_common | default([]))
@@ -106,3 +121,9 @@ artifacts_merged: >-
     + (artifacts_role  | default([]))
     + (artifacts_host  | default([]))
   }}
+
+# Services and firewall
+services_enabled: []
+services_disabled: []
+firewall_allow_ports: []
+firewall_enable_services: []

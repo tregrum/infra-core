@@ -1,0 +1,25 @@
+---
+
+- name: Kernel system tunables
+  ansible.posix.sysctl:
+    name: "{{ item.param }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ kernel_sysctl_settings | default([], true) }}"
+  when: kernel_sysctl_settings | default([], true) | length > 0
+
+- name: Ensure NetworkManager wait timeout is configured
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/10-wait-timeout.conf
+    content: |
+      [connection]
+      wait-device-timeout={{ networkmanager_wait_device_timeout }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart NetworkManager
+  when: networkmanager_wait_device_timeout is defined
+#
