@@ -168,6 +168,7 @@ EOF_INV
 # dns_domain_search: "example.com"
 # selinux_config: "permissive"
 # sudoers_group: "sudo_app_admins"
+# sudoers_nopassword: false # Set true only to explicitly allow passwordless sudo.
 # mail_relay: "mailrelay.example.com"
 
 # == Packages, repositories, and updates ==

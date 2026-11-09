@@ -69,6 +69,15 @@ dnf_automatic:
 
 Local users and groups are driven through `local_groups`, `group_members`, and `local_accounts`. `sudoers_group` can be used for a simple shared administrative sudo rule.
 
+The managed sudo rule requires authentication by default (`sudoers_nopassword: false`). Set the optional variable to `true` in the environment's `inventory/group_vars/all.yml` or a more specific inventory variable file to explicitly allow passwordless sudo:
+
+```yaml
+sudoers_group: "sudo_app_admins"
+sudoers_nopassword: false # Set true only when passwordless sudo is intended.
+```
+
+Previously, the role inherited `community.general.sudoers`'s passwordless default. On the next run, existing managed rules will require authentication unless `sudoers_nopassword: true` is explicitly configured. If the Ansible connection user relies on this rule, provide its sudo password with `--ask-become-pass` (`-K`) or a vaulted `ansible_become_password`. This setting applies only to this role's managed group rule; other sudo policies and sudo's authentication cache still apply. When `sudoers_group` is empty or unset, the sudoers task is skipped.
+
 ### Storage, Filesystems, Paths, and ACLs
 
 Use `local_mounts` for LVM-backed filesystems managed by this role. Use `network_mounts` for remote filesystems that should be present in `fstab` and mounted, such as NFS exports from another host. Use `nfs_exports` when this host should serve one or more exports itself.

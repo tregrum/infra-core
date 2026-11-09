@@ -14,6 +14,7 @@ timezone: ""
 dns_domain_search: ""
 selinux_config: ""
 sudoers_group: ""
+sudoers_nopassword: false # Set true only to explicitly allow passwordless sudo.
 mail_relay: ""
 etc_motd_content: |+
   #############################################################################

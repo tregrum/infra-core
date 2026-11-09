@@ -106,6 +106,7 @@
     name: '{{ sudoers_group }}'
     commands: ALL
     group: '{{ sudoers_group }}'
+    nopassword: '{{ sudoers_nopassword | default(false) | bool }}'
     state: present
   when:
     - sudoers_group is defined
